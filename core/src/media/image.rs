@@ -24,6 +24,12 @@ const VISION_GRID_BATCH: usize = 4;
 /// by OpenAI, Claude and Qwen-VL). Images are letterboxed (aspect preserved,
 /// white padding) into their square cell.
 const VISION_GRID_CELL: u32 = 512;
+/// Bound source images before the vision-grid decoder allocates their full RGB
+/// buffers. Social posts can contain extremely long screenshots whose encoded
+/// files are small but whose decoded surfaces are hundreds of MiB.
+const VISION_MAX_IMAGE_PIXELS: u64 = 16 * 1024 * 1024;
+const VISION_MAX_IMAGE_DIMENSION: u32 = 16_384;
+const VISION_MAX_DECODE_ALLOC_BYTES: u64 = 96 * 1024 * 1024;
 
 impl MediaProcessor {
     pub fn ocr_image(&self, payload: &[u8]) -> Result<String> {
@@ -40,12 +46,11 @@ impl MediaProcessor {
         }
     }
 
-    /// OCR the already-downloaded images of a note in place: read each image with
-    /// a `local_path`, run them as one batched PP-OCRv6 `predict`, and attach
-    /// `ocr_text` (or `ocr_error`) per image. Returns the batch inference time so
-    /// the caller can record per-note OCR cost. Runs the CPU-bound inference on a
-    /// blocking thread. No-op (returns zero) when OCR is disabled or no image has
-    /// a local path.
+    /// OCR the already-downloaded images of a note in place. Each image is read,
+    /// predicted, and released before the next image is loaded, so cancelling a
+    /// note task leaves at most one blocking image inference behind and carousel
+    /// bytes never accumulate in memory. Returns summed inference time. No-op
+    /// when OCR is disabled or no image has a local path.
     pub async fn ocr_downloaded_images(&self, images: &mut [Value]) -> std::time::Duration {
         if !self.config.use_ocr || images.is_empty() {
             return std::time::Duration::ZERO;
@@ -65,32 +70,34 @@ impl MediaProcessor {
             return std::time::Duration::ZERO;
         }
 
-        let batch = tokio::task::spawn_blocking(move || {
-            let items: Vec<(usize, Vec<u8>)> = jobs
-                .into_iter()
-                .filter_map(|(idx, path)| std::fs::read(&path).ok().map(|bytes| (idx, bytes)))
-                .collect();
-            crate::media::ocr::ocr_images_bytes(items)
-        })
-        .await;
-
-        let Ok(batch) = batch else {
-            return std::time::Duration::ZERO;
-        };
-        self.timing.record("ocr_predict", batch.predict);
-        for (idx, result) in batch.results {
-            let Some(item) = images.get_mut(idx) else {
+        let mut predict = std::time::Duration::ZERO;
+        for (idx, path) in jobs {
+            let batch = tokio::task::spawn_blocking(move || {
+                let items = std::fs::read(&path)
+                    .map(|bytes| vec![(idx, bytes)])
+                    .unwrap_or_default();
+                crate::media::ocr::ocr_images_bytes(items)
+            })
+            .await;
+            let Ok(batch) = batch else {
                 continue;
             };
-            match result {
-                Ok(text) if !text.trim().is_empty() => {
-                    insert_string(item, "ocr_text", text);
+            predict += batch.predict;
+            for (result_idx, result) in batch.results {
+                let Some(item) = images.get_mut(result_idx) else {
+                    continue;
+                };
+                match result {
+                    Ok(text) if !text.trim().is_empty() => {
+                        insert_string(item, "ocr_text", text);
+                    }
+                    Ok(_) => {}
+                    Err(err) => insert_string(item, "ocr_error", err),
                 }
-                Ok(_) => {}
-                Err(err) => insert_string(item, "ocr_error", err),
             }
         }
-        batch.predict
+        self.timing.record("ocr_predict", predict);
+        predict
     }
 
     /// OCR card cover images *without persisting them* — used by the cards-only
@@ -504,7 +511,7 @@ fn compose_grid(payloads: &[&[u8]], cell: u32) -> Option<Vec<u8>> {
     let mut canvas = RgbImage::from_pixel(cols * cell, rows * cell, Rgb([255, 255, 255]));
     let mut any = false;
     for (i, payload) in payloads.iter().enumerate() {
-        let Ok(decoded) = image::load_from_memory(payload) else {
+        let Some(decoded) = decode_grid_source(payload) else {
             continue; // leave a blank cell on decode failure
         };
         any = true;
@@ -527,6 +534,34 @@ fn compose_grid(payloads: &[&[u8]], cell: u32) -> Option<Vec<u8>> {
         .write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Jpeg)
         .ok()?;
     Some(buf)
+}
+
+fn decode_grid_source(payload: &[u8]) -> Option<image::DynamicImage> {
+    let dimensions_reader = image::ImageReader::new(std::io::Cursor::new(payload))
+        .with_guessed_format()
+        .ok()?;
+    let (width, height) = dimensions_reader.into_dimensions().ok()?;
+    if !grid_source_dimensions_allowed(width, height) {
+        return None;
+    }
+
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(VISION_MAX_IMAGE_DIMENSION);
+    limits.max_image_height = Some(VISION_MAX_IMAGE_DIMENSION);
+    limits.max_alloc = Some(VISION_MAX_DECODE_ALLOC_BYTES);
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(payload))
+        .with_guessed_format()
+        .ok()?;
+    reader.limits(limits);
+    reader.decode().ok()
+}
+
+fn grid_source_dimensions_allowed(width: u32, height: u32) -> bool {
+    width <= VISION_MAX_IMAGE_DIMENSION
+        && height <= VISION_MAX_IMAGE_DIMENSION
+        && u64::from(width)
+            .checked_mul(u64::from(height))
+            .is_some_and(|pixels| pixels <= VISION_MAX_IMAGE_PIXELS)
 }
 
 /// Parse `N` per-cell descriptions from a grid vision reply. Lines beginning
@@ -614,5 +649,16 @@ mod tests {
         // 2 images → 1 row, 2 cols → 1024x512.
         assert_eq!(decoded.width(), 1024);
         assert_eq!(decoded.height(), 512);
+    }
+
+    #[test]
+    fn vision_grid_rejects_pathological_source_dimensions() {
+        assert!(grid_source_dimensions_allowed(1080, 1440));
+        assert!(grid_source_dimensions_allowed(4096, 4096));
+        assert!(!grid_source_dimensions_allowed(4097, 4096));
+        assert!(!grid_source_dimensions_allowed(
+            1024,
+            VISION_MAX_IMAGE_DIMENSION + 1
+        ));
     }
 }

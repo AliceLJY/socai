@@ -1677,10 +1677,11 @@ async fn scan_card_note(
     entry
 }
 
-/// Max note OCR tasks in flight at once. The OCR engine serializes inference
-/// behind its own mutex, so this mainly bounds decoded-image memory and blocking
-/// threads while still letting OCR overlap the browse loop.
-const OCR_PIPELINE_CONCURRENCY: usize = 4;
+/// Max note OCR tasks in flight at once. Each task may own a full carousel of
+/// decoded images while it waits for the process-global OCR engine. Keep this
+/// at one so a hosted worker never retains several carousels beside ONNX's
+/// inference arena; the task still overlaps the browser's next note read.
+const OCR_PIPELINE_CONCURRENCY: usize = 1;
 
 /// Spawn a background task that OCRs a freshly-read note's already-downloaded
 /// media — each carousel image for an image note, the poster (cover) for a
@@ -1696,7 +1697,7 @@ fn spawn_note_ocr(
     progress: ScanProgress,
     item_index: usize,
     title: Option<String>,
-) -> Option<tokio::task::JoinHandle<NoteOcrResult>> {
+) -> Option<AbortOnDropJoinHandle<NoteOcrResult>> {
     // Only fresh successful reads (they carry `ok`); cache hits carry `skipped`
     // and already have their ocr_text.
     if entry.get("ok").and_then(Value::as_bool) != Some(true) {
@@ -1731,7 +1732,7 @@ fn spawn_note_ocr(
     let media = media.clone()?;
     let sem = sem.clone();
     let mut images = images;
-    Some(tokio::spawn(async move {
+    Some(AbortOnDropJoinHandle::new(tokio::spawn(async move {
         let _permit = sem.acquire_owned().await;
         progress.ocr_started(item_index, title.clone());
         // Measure wall start→end relative to the shared scan epoch so the perf
@@ -1752,7 +1753,7 @@ fn spawn_note_ocr(
             finished_ms,
             predict_ms: predict.as_millis() as u64,
         }
-    }))
+    })))
 }
 
 /// A note's background OCR result plus its measured timing (ms since the scan
@@ -1822,14 +1823,14 @@ fn harvest_note_perf(
 /// task is keyed by note index.
 async fn join_note_ocr(
     notes: &mut [Value],
-    pending: Vec<(usize, tokio::task::JoinHandle<NoteOcrResult>)>,
+    pending: Vec<(usize, AbortOnDropJoinHandle<NoteOcrResult>)>,
     history: &XhsHistoryStore,
     level: &str,
     include_media: bool,
 ) -> Vec<NoteOcrTiming> {
     let mut timings = Vec::new();
     for (idx, handle) in pending {
-        let Ok(result) = handle.await else {
+        let Ok(result) = handle.join().await else {
             continue;
         };
         timings.push(NoteOcrTiming {
@@ -5364,7 +5365,7 @@ impl Tool for SearchTool {
         // OCR and ASR run in the background so they overlap the next
         // note's read + download; tasks are joined after the browse loop.
         let ocr_sem = Arc::new(tokio::sync::Semaphore::new(OCR_PIPELINE_CONCURRENCY));
-        let mut pending_ocr: Vec<(usize, tokio::task::JoinHandle<NoteOcrResult>)> = Vec::new();
+        let mut pending_ocr: Vec<(usize, AbortOnDropJoinHandle<NoteOcrResult>)> = Vec::new();
         let asr_sem = Arc::new(tokio::sync::Semaphore::new(ASR_PIPELINE_CONCURRENCY));
         let mut pending_transcribe: Vec<(usize, AbortOnDropJoinHandle<NoteTranscribeResult>)> =
             Vec::new();
@@ -6042,7 +6043,7 @@ impl Tool for AuthorScanTool {
             // OCR and ASR run in the background so they overlap the next
             // note's read + download; tasks are joined after the loop.
             let ocr_sem = Arc::new(tokio::sync::Semaphore::new(OCR_PIPELINE_CONCURRENCY));
-            let mut pending_ocr: Vec<(usize, tokio::task::JoinHandle<NoteOcrResult>)> = Vec::new();
+            let mut pending_ocr: Vec<(usize, AbortOnDropJoinHandle<NoteOcrResult>)> = Vec::new();
             let asr_sem = Arc::new(tokio::sync::Semaphore::new(ASR_PIPELINE_CONCURRENCY));
             let mut pending_transcribe: Vec<(usize, AbortOnDropJoinHandle<NoteTranscribeResult>)> =
                 Vec::new();

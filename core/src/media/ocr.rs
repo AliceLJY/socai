@@ -19,6 +19,8 @@
 //! the media pipeline already treats per-image errors as "no text".
 
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+use std::io::Cursor;
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 use std::path::{Path, PathBuf};
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 use std::sync::{Mutex, OnceLock};
@@ -28,6 +30,8 @@ use std::time::Instant;
 
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 use anyhow::{anyhow, Context, Result};
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+use oar_ocr::core::config::OrtSessionConfig;
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 use oar_ocr::oarocr::{OAROCRBuilder, OAROCR};
 use serde_json::{json, Value};
@@ -51,32 +55,33 @@ const OCR_UNAVAILABLE: &str =
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 static ENGINE: OnceLock<std::result::Result<Mutex<OAROCR>, String>> = OnceLock::new();
 
-/// Run OCR on a batch of already-decoded image byte blobs, tagged with a caller
-/// index so results can be mapped back. All successfully-decoded images are run
-/// in a **single batched `predict`** call — oar-ocr parallelizes the batch across
-/// cores (rayon), which is ~1.5× faster than predicting one image at a time —
-/// and `predict` is the timed wall of that one call. Per-image inference time is
-/// therefore not available (that's the cost of batching); callers measure per
-/// note/batch instead. Decode/engine/predict failures are returned per item as
-/// `Err(message)` and never panic. Designed to be called from inside
+/// Keep ONNX detection and recognition allocations bounded on hosted workers.
+/// A Xiaohongshu carousel commonly contains 8 images; allowing the OCR crate to
+/// pick its recommended batch size can make one detection call allocate several
+/// hundred MiB. Detection is therefore strictly serial while recognition uses
+/// a small batch that still amortizes its fixed inference cost.
+const OCR_IMAGE_BATCH_SIZE: usize = 1;
+const OCR_REGION_BATCH_SIZE: usize = 16;
+/// Reject pathological social-media images before decoding. Long screenshots
+/// can advertise hundreds of megapixels while remaining small on the wire;
+/// converting one to RGB would otherwise ask Rust for several hundred MiB and
+/// abort a memory-limited worker before `image` can return an error.
+const OCR_MAX_IMAGE_PIXELS: u64 = 16 * 1024 * 1024;
+const OCR_MAX_IMAGE_DIMENSION: u32 = 16_384;
+const OCR_MAX_DECODE_ALLOC_BYTES: u64 = 96 * 1024 * 1024;
+
+/// Run OCR on encoded image byte blobs, tagged with a caller index. The
+/// process-global engine lock is acquired before decoding, then each image is
+/// decoded, predicted, and released before the next image. This bounds decoded
+/// carousel residency to one image and prevents another scan from decoding
+/// beside ONNX's inference arena. Decode/engine/predict failures are returned
+/// per item as `Err(message)` and never panic. Designed to be called from inside
 /// `tokio::task::spawn_blocking`.
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 pub fn ocr_images_bytes(items: Vec<(usize, Vec<u8>)>) -> OcrBatch {
-    let mut out: Vec<(usize, std::result::Result<String, String>)> = Vec::new();
-    let mut idxs: Vec<usize> = Vec::new();
-    let mut imgs: Vec<image::RgbImage> = Vec::new();
-    for (idx, bytes) in items {
-        match image::load_from_memory(&bytes) {
-            Ok(image) => {
-                idxs.push(idx);
-                imgs.push(image.to_rgb8());
-            }
-            Err(err) => out.push((idx, Err(format!("image decode failed: {err}")))),
-        }
-    }
-    if imgs.is_empty() {
+    if items.is_empty() {
         return OcrBatch {
-            results: out,
+            results: Vec::new(),
             predict: Duration::ZERO,
         };
     }
@@ -84,54 +89,63 @@ pub fn ocr_images_bytes(items: Vec<(usize, Vec<u8>)>) -> OcrBatch {
     let engine = match engine() {
         Ok(engine) => engine,
         Err(err) => {
-            for idx in idxs {
-                out.push((idx, Err(err.clone())));
-            }
             return OcrBatch {
-                results: out,
+                results: items
+                    .into_iter()
+                    .map(|(idx, _)| (idx, Err(err.clone())))
+                    .collect(),
                 predict: Duration::ZERO,
             };
         }
     };
 
-    // Time only the predict() call (inside the lock) so the reported cost is the
-    // true batch inference time, not engine-mutex wait.
-    let (predicted, predict) = match engine.lock() {
-        Ok(ocr) => {
-            let t0 = Instant::now();
-            let predicted = ocr.predict(imgs);
-            (predicted, t0.elapsed())
-        }
+    // Lock before decode: callers from different scans cannot retain decoded
+    // images while waiting for the shared ONNX engine.
+    let ocr = match engine.lock() {
+        Ok(ocr) => ocr,
         Err(_) => {
-            for idx in idxs {
-                out.push((idx, Err("ocr engine mutex poisoned".into())));
-            }
             return OcrBatch {
-                results: out,
+                results: items
+                    .into_iter()
+                    .map(|(idx, _)| (idx, Err("ocr engine mutex poisoned".into())))
+                    .collect(),
                 predict: Duration::ZERO,
             };
         }
     };
 
-    match predicted {
-        Ok(results) => {
-            for (idx, result) in idxs.into_iter().zip(results) {
-                let text = result
-                    .text_regions
-                    .iter()
-                    .filter_map(|region| region.text.as_ref().map(|t| t.to_string()))
-                    .map(|line| line.trim().to_string())
-                    .filter(|line| !line.is_empty())
-                    .collect::<Vec<_>>()
-                    .join("\n");
+    let mut out = Vec::with_capacity(items.len());
+    let mut predict = Duration::ZERO;
+    for (idx, bytes) in items {
+        let image = match decode_ocr_image(&bytes) {
+            Ok(image) => image,
+            Err(err) => {
+                out.push((idx, Err(format!("image decode failed: {err}"))));
+                continue;
+            }
+        };
+        let t0 = Instant::now();
+        let result = ocr.predict(vec![image]);
+        predict += t0.elapsed();
+        match result {
+            Ok(results) => {
+                let text = results
+                    .into_iter()
+                    .next()
+                    .map(|result| {
+                        result
+                            .text_regions
+                            .iter()
+                            .filter_map(|region| region.text.as_ref().map(|text| text.to_string()))
+                            .map(|line| line.trim().to_string())
+                            .filter(|line| !line.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
                 out.push((idx, Ok(text)));
             }
-        }
-        Err(err) => {
-            let msg = format!("ocr predict failed: {err}");
-            for idx in idxs {
-                out.push((idx, Err(msg.clone())));
-            }
+            Err(err) => out.push((idx, Err(format!("ocr predict failed: {err}")))),
         }
     }
     OcrBatch {
@@ -140,8 +154,46 @@ pub fn ocr_images_bytes(items: Vec<(usize, Vec<u8>)>) -> OcrBatch {
     }
 }
 
-/// Result of one batched OCR call: per-image text outcomes (in input order) plus
-/// the wall time of the single `predict` call (excludes decode and mutex wait).
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn decode_ocr_image(bytes: &[u8]) -> Result<image::RgbImage> {
+    let dimensions_reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .context("guess image format")?;
+    let (width, height) = dimensions_reader
+        .into_dimensions()
+        .context("read image dimensions")?;
+    ensure_ocr_dimensions(width, height)?;
+
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(OCR_MAX_IMAGE_DIMENSION);
+    limits.max_image_height = Some(OCR_MAX_IMAGE_DIMENSION);
+    limits.max_alloc = Some(OCR_MAX_DECODE_ALLOC_BYTES);
+    let mut reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .context("guess image format")?;
+    reader.limits(limits);
+    Ok(reader.decode().context("decode bounded image")?.to_rgb8())
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn ensure_ocr_dimensions(width: u32, height: u32) -> Result<()> {
+    let pixels = u64::from(width)
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| anyhow!("image dimensions overflow: {width}x{height}"))?;
+    if width > OCR_MAX_IMAGE_DIMENSION
+        || height > OCR_MAX_IMAGE_DIMENSION
+        || pixels > OCR_MAX_IMAGE_PIXELS
+    {
+        anyhow::bail!(
+            "image dimensions exceed OCR safety limit: {width}x{height} ({pixels} pixels)"
+        );
+    }
+    Ok(())
+}
+
+/// Result of one OCR call: per-image text outcomes (in input order) plus the
+/// summed wall time of its per-image `predict` calls (excludes decode and mutex
+/// wait).
 pub struct OcrBatch {
     pub results: Vec<(usize, std::result::Result<String, String>)>,
     pub predict: Duration,
@@ -196,6 +248,10 @@ pub fn diagnostics() -> Value {
         "model": MODEL_NAME,
         "runtime": runtime,
         "execution_provider": execution_provider,
+        "image_batch_size": OCR_IMAGE_BATCH_SIZE,
+        "region_batch_size": OCR_REGION_BATCH_SIZE,
+        "max_image_pixels": OCR_MAX_IMAGE_PIXELS,
+        "max_decode_alloc_bytes": OCR_MAX_DECODE_ALLOC_BYTES,
         // Debug builds run OCR ~7-8× slower than release; surface it so a slow
         // perf record is obviously attributable to an unoptimized build.
         "build": if cfg!(debug_assertions) { "debug" } else { "release" },
@@ -228,11 +284,19 @@ fn build_engine() -> Result<Mutex<OAROCR>> {
     let dict = write_asset(&dir, "ppocrv6_tiny_rec_dict.txt", REC_DICT)?;
 
     // CPU execution provider (oar-ocr's default when no ort_session is set).
+    let ort_session = OrtSessionConfig::new()
+        .with_intra_threads(1)
+        .with_inter_threads(1)
+        .with_parallel_execution(false)
+        .with_memory_pattern(false);
     let ocr = OAROCRBuilder::new(
         det.to_string_lossy().into_owned(),
         rec.to_string_lossy().into_owned(),
         dict.to_string_lossy().into_owned(),
     )
+    .ort_session(ort_session)
+    .image_batch_size(OCR_IMAGE_BATCH_SIZE)
+    .region_batch_size(OCR_REGION_BATCH_SIZE)
     .build()
     .context("build PP-OCRv6 OCR pipeline")?;
     Ok(Mutex::new(ocr))
@@ -273,6 +337,10 @@ mod tests {
     fn diagnostics_reports_machine_and_model() {
         let d = diagnostics();
         assert_eq!(d["execution_provider"], "cpu");
+        assert_eq!(d["image_batch_size"], OCR_IMAGE_BATCH_SIZE);
+        assert_eq!(d["region_batch_size"], OCR_REGION_BATCH_SIZE);
+        assert_eq!(d["max_image_pixels"], OCR_MAX_IMAGE_PIXELS);
+        assert_eq!(d["max_decode_alloc_bytes"], OCR_MAX_DECODE_ALLOC_BYTES);
         assert!(d["model"].as_str().is_some_and(|s| s.contains("PP-OCRv6")));
         let machine = &d["machine"];
         assert_eq!(machine["os"], std::env::consts::OS);
@@ -282,6 +350,14 @@ mod tests {
         assert!(machine.get("cpu_model").is_some());
         assert!(machine.get("cpu_count").is_some());
         assert!(machine.get("memory_total_mb").is_some());
+    }
+
+    #[test]
+    fn rejects_pathological_image_dimensions_before_decode() {
+        assert!(ensure_ocr_dimensions(1080, 1440).is_ok());
+        assert!(ensure_ocr_dimensions(4096, 4096).is_ok());
+        assert!(ensure_ocr_dimensions(4097, 4096).is_err());
+        assert!(ensure_ocr_dimensions(1024, OCR_MAX_IMAGE_DIMENSION + 1).is_err());
     }
 
     /// Manual smoke test: exercises the full embedded-model → ort → predict path
