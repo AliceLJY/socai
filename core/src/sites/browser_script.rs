@@ -1047,6 +1047,10 @@ impl Tool for BrowserScriptTool {
         })
     }
 
+    fn external_write(&self) -> bool {
+        true
+    }
+
     fn always_available(&self) -> bool {
         true
     }
@@ -1556,6 +1560,10 @@ impl Tool for LocalOverrideTool {
 
     fn input_schema(&self) -> Value {
         self.inner.input_schema()
+    }
+
+    fn external_write(&self) -> bool {
+        self.inner.external_write()
     }
 
     fn always_available(&self) -> bool {
