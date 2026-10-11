@@ -137,6 +137,38 @@ async fn validate_public_url(raw: &str) -> anyhow::Result<reqwest::Url> {
     Ok(url)
 }
 
+fn managed_social_site(raw: &str) -> Option<&'static str> {
+    let url = reqwest::Url::parse(raw).ok()?;
+    let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+    let matches = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
+    if matches("xiaohongshu.com") || matches("xhslink.com") {
+        Some("xhs")
+    } else if matches("douyin.com") {
+        Some("dy")
+    } else if matches("tiktok.com") {
+        Some("tiktok")
+    } else if matches("instagram.com") {
+        Some("instagram")
+    } else if matches("linkedin.com") {
+        Some("linkedin")
+    } else if matches("x.com") || matches("twitter.com") {
+        Some("x")
+    } else {
+        None
+    }
+}
+
+async fn reject_generic_social_interaction(page: &PageSession) -> anyhow::Result<()> {
+    let info = page.page_info().await?;
+    let current_url = info.get("url").and_then(Value::as_str).unwrap_or("");
+    if let Some(site) = managed_social_site(current_url) {
+        anyhow::bail!(
+            "generic Web interaction is read-only on {site}; use the native {site} tools so social writes require an exact user grant"
+        );
+    }
+    Ok(())
+}
+
 pub fn web_tools(page: Arc<PageSession>) -> Vec<Arc<dyn Tool>> {
     vec![
         Arc::new(NavigateTool { page: page.clone() }),
@@ -435,7 +467,7 @@ impl Tool for ClickTool {
     }
 
     fn description(&self) -> &str {
-        "Click a visible page control from the latest web_read, preferably by its ref. A text lookup is available when a page rerenders."
+        "Click a visible non-social Web control from the latest web_read, preferably by its ref. A text lookup is available when a page rerenders. Supported social sites require their native tools."
     }
 
     fn input_schema(&self) -> Value {
@@ -450,6 +482,7 @@ impl Tool for ClickTool {
     }
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        reject_generic_social_interaction(&self.page).await?;
         let reference = input
             .get("ref")
             .and_then(Value::as_str)
@@ -526,7 +559,7 @@ impl Tool for TypeTool {
     }
 
     fn description(&self) -> &str {
-        "Type into a visible public search or filter field referenced by web_read. The typed text is not echoed in the tool result. Never use this for credentials or sensitive data."
+        "Type into a visible non-social public search or filter field referenced by web_read. The typed text is not echoed in the tool result. Never use this for credentials or sensitive data. Supported social sites require their native tools."
     }
 
     fn input_schema(&self) -> Value {
@@ -543,6 +576,7 @@ impl Tool for TypeTool {
     }
 
     async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        reject_generic_social_interaction(&self.page).await?;
         let reference = required_text(&input, "ref")?;
         let text = input
             .get("text")
@@ -653,6 +687,24 @@ mod tests {
                 .unwrap()
                 .host_str(),
             Some("8.8.8.8")
+        );
+    }
+
+    #[test]
+    fn recognizes_supported_social_hosts_without_matching_lookalikes() {
+        assert_eq!(
+            managed_social_site("https://www.xiaohongshu.com/explore/1"),
+            Some("xhs")
+        );
+        assert_eq!(managed_social_site("https://mobile.x.com/home"), Some("x"));
+        assert_eq!(
+            managed_social_site("https://www.linkedin.com/feed/"),
+            Some("linkedin")
+        );
+        assert_eq!(managed_social_site("https://x.com.example.com/"), None);
+        assert_eq!(
+            managed_social_site("https://example.com/?next=https://x.com"),
+            None
         );
     }
 }

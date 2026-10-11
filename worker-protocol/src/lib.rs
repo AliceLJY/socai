@@ -200,6 +200,9 @@ fn validate_id(field: &'static str, value: &str) -> Result<(), ProtocolError> {
     Ok(())
 }
 
+// Commands are short-lived wire frames. Keeping RunStart inline preserves the
+// stable, inspectable protocol shape even though it carries the full run spec.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkerCommand {
