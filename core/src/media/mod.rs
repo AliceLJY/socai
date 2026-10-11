@@ -1,7 +1,8 @@
 //! Optional local/media processing used by site runtimes.
 //!
 //! Nothing here shells out to external media tools: video covers come from
-//! their own CDN URL, OCR runs in-process, and Whisper small audio transcription
+//! their own CDN URL, OCR uses the bundled local engine unless a host supplies
+//! an authenticated remote OCR endpoint, and Whisper small audio transcription
 //! runs in a bundled local worker. Site runtimes can opt into this crate for
 //! heavier media enrichment while keeping plain DOM extraction fast and
 //! portable.
@@ -14,6 +15,7 @@ mod image;
 mod md5;
 mod ocr;
 mod processor;
+mod remote_ocr;
 mod timing;
 mod video;
 
@@ -33,4 +35,5 @@ pub use self::ocr::diagnostics as ocr_diagnostics;
 pub(crate) use self::ocr::ocr_images_bytes;
 pub use self::ocr::warm_up as ocr_warm_up;
 pub use self::processor::MediaProcessor;
+pub use self::remote_ocr::RemoteOcrConfig;
 pub use self::timing::{timing_delta, TimingRecord, TimingSnapshot};

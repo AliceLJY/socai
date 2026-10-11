@@ -11,6 +11,7 @@ use tokio::io::AsyncWriteExt;
 use crate::media::common::{
     ensure_dir, named_file_path, save_bytes, save_named_bytes, MediaConfig, USER_AGENT,
 };
+use crate::media::remote_ocr::RemoteOcrConfig;
 use crate::media::timing::TimingRecord;
 
 #[derive(Clone)]
@@ -20,6 +21,7 @@ pub struct MediaProcessor {
     pub(crate) client: reqwest::Client,
     pub(crate) timing: Arc<TimingRecord>,
     pub(crate) billing_task_id: Option<String>,
+    pub(crate) remote_ocr: Option<RemoteOcrConfig>,
 }
 
 impl MediaProcessor {
@@ -35,6 +37,7 @@ impl MediaProcessor {
             client,
             timing: Arc::new(TimingRecord::default()),
             billing_task_id: None,
+            remote_ocr: None,
         })
     }
 
@@ -48,12 +51,25 @@ impl MediaProcessor {
         )
     }
 
+    pub fn for_tool_context(
+        ctx: &crate::agent::ToolContext,
+        llm_provider: Option<Arc<dyn LlmProvider>>,
+    ) -> Result<Self> {
+        let mut processor = Self::for_run_dir(ctx.output_dir(), llm_provider)?;
+        processor.set_remote_ocr(ctx.remote_ocr());
+        Ok(processor)
+    }
+
     pub fn timing(&self) -> Arc<TimingRecord> {
         self.timing.clone()
     }
 
     pub fn set_cloud_asr(&mut self, enabled: bool) {
         self.config.use_cloud_asr = enabled;
+    }
+
+    pub fn set_remote_ocr(&mut self, config: Option<RemoteOcrConfig>) {
+        self.remote_ocr = config;
     }
 
     pub fn set_billing_task_id(&mut self, task_id: Option<&str>) {

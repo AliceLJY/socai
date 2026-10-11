@@ -18,6 +18,7 @@ pub const WORKER_CAPABILITIES: &[&str] = &[
     "interactive_login_resume.v1",
     "kernel_cdp_binding.v1",
     "host_tools.v1",
+    "remote_ocr.v1",
     "multi_site_namespaces.v1",
     "persistent_conversation.v1",
     "run_sequence_resume.v1",

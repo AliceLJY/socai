@@ -45,6 +45,7 @@ use crate::agent::tool::{
     SharedTool, SharedToolFailureRecovery, ToolContext, ToolProgressEvent, ToolRecoveryOutcome,
     ToolResult, ToolResultBlock,
 };
+use crate::media::RemoteOcrConfig;
 use crate::telemetry::trace::RunTraceBuilder;
 
 /// Events streamed to subscribers while the agent is running.
@@ -131,6 +132,8 @@ pub struct AgentOptions {
     pub background_media_generation: Option<u64>,
     /// Optional client task id for aggregating paid cloud-tool usage.
     pub billing_task_id: Option<String>,
+    /// Optional host-owned OCR endpoint. Local entrypoints leave this unset.
+    pub remote_ocr: Option<RemoteOcrConfig>,
     /// Optional entrypoint-owned recovery hook for transient dependencies used
     /// by tools. A recovered call is retried once; failed recovery switches
     /// the loop to a tool-free best-effort summary.
@@ -152,6 +155,7 @@ impl Default for AgentOptions {
             session_id: None,
             background_media_generation: None,
             billing_task_id: None,
+            remote_ocr: None,
             tool_failure_recovery: None,
         }
     }
@@ -226,7 +230,8 @@ pub async fn run_agent_with_events(
     let mut ctx = ToolContext::new(&run_id, &run_dir)
         .with_run_state(Arc::clone(&run_state))
         .with_background_media_generation(options.background_media_generation)
-        .with_billing_task_id(options.billing_task_id);
+        .with_billing_task_id(options.billing_task_id)
+        .with_remote_ocr(options.remote_ocr);
     for site in &options.enabled_sites {
         ctx.enable_site(site.clone());
     }

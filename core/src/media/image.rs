@@ -32,6 +32,9 @@ const VISION_MAX_IMAGE_DIMENSION: u32 = 16_384;
 const VISION_MAX_DECODE_ALLOC_BYTES: u64 = 96 * 1024 * 1024;
 
 impl MediaProcessor {
+    /// Run the bundled local OCR engine synchronously. Hosted site tools use
+    /// `ocr_image_timed` internally so a configured remote provider remains
+    /// asynchronous without breaking this existing public API.
     pub fn ocr_image(&self, payload: &[u8]) -> Result<String> {
         if !self.config.use_ocr {
             anyhow::bail!(MediaUnavailable("OCR is disabled".into()));
@@ -43,6 +46,36 @@ impl MediaProcessor {
         match batch.results.pop() {
             Some((_, result)) => result.map_err(|err| anyhow::anyhow!(err)),
             None => Ok(String::new()),
+        }
+    }
+
+    pub(crate) async fn ocr_image_timed(
+        &self,
+        payload: &[u8],
+    ) -> Result<(String, std::time::Duration)> {
+        if !self.config.use_ocr {
+            anyhow::bail!(MediaUnavailable("OCR is disabled".into()));
+        }
+        if payload.is_empty() {
+            return Ok((String::new(), std::time::Duration::ZERO));
+        }
+        if let Some(remote) = &self.remote_ocr {
+            let started = Instant::now();
+            let text = remote.recognize(payload).await?;
+            return Ok((text, started.elapsed()));
+        }
+        let bytes = payload.to_vec();
+        let mut batch = tokio::task::spawn_blocking(move || {
+            crate::media::ocr::ocr_images_bytes(vec![(0, bytes)])
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("OCR task failed: {error}"))?;
+        let predict = batch.predict;
+        match batch.results.pop() {
+            Some((_, result)) => result
+                .map(|text| (text, predict))
+                .map_err(|err| anyhow::anyhow!(err)),
+            None => Ok((String::new(), predict)),
         }
     }
 
@@ -72,28 +105,20 @@ impl MediaProcessor {
 
         let mut predict = std::time::Duration::ZERO;
         for (idx, path) in jobs {
-            let batch = tokio::task::spawn_blocking(move || {
-                let items = std::fs::read(&path)
-                    .map(|bytes| vec![(idx, bytes)])
-                    .unwrap_or_default();
-                crate::media::ocr::ocr_images_bytes(items)
-            })
-            .await;
-            let Ok(batch) = batch else {
+            let Ok(bytes) = tokio::fs::read(&path).await else {
                 continue;
             };
-            predict += batch.predict;
-            for (result_idx, result) in batch.results {
-                let Some(item) = images.get_mut(result_idx) else {
-                    continue;
-                };
-                match result {
-                    Ok(text) if !text.trim().is_empty() => {
+            let Some(item) = images.get_mut(idx) else {
+                continue;
+            };
+            match self.ocr_image_timed(&bytes).await {
+                Ok((text, elapsed)) => {
+                    predict += elapsed;
+                    if !text.trim().is_empty() {
                         insert_string(item, "ocr_text", text);
                     }
-                    Ok(_) => {}
-                    Err(err) => insert_string(item, "ocr_error", err),
                 }
+                Err(err) => insert_string(item, "ocr_error", format!("{err:#}")),
             }
         }
         self.timing.record("ocr_predict", predict);
@@ -127,6 +152,39 @@ impl MediaProcessor {
             .collect();
         if jobs.is_empty() {
             return std::time::Duration::ZERO;
+        }
+
+        if self.remote_ocr.is_some() {
+            let t_dl = Instant::now();
+            let mut predict = std::time::Duration::ZERO;
+            for (idx, url) in jobs {
+                let (bytes, error) = self.safe_download(url, referer.to_string()).await;
+                let Some(card) = cards.get_mut(idx) else {
+                    continue;
+                };
+                if let Some(error) = error {
+                    insert_string(card, "ocr_error", error);
+                    continue;
+                }
+                if bytes.is_empty() {
+                    continue;
+                }
+                match self.ocr_image_timed(&bytes).await {
+                    Ok((text, elapsed)) => {
+                        predict += elapsed;
+                        if !text.trim().is_empty() {
+                            insert_string(card, "ocr_text", text);
+                        }
+                    }
+                    Err(error) => insert_string(card, "ocr_error", format!("{error:#}")),
+                }
+            }
+            self.timing.record(
+                "ocr_cover_download_batch",
+                t_dl.elapsed().saturating_sub(predict),
+            );
+            self.timing.record("ocr_predict", predict);
+            return predict;
         }
 
         // Fetch covers concurrently (network-bound), then OCR on a blocking
@@ -420,8 +478,8 @@ impl MediaProcessor {
         // OCR is local + synchronous — do it inline.
         for (item, payload) in items.iter_mut() {
             if !payload.is_empty() && self.config.use_ocr && item.get("ocr_text").is_none() {
-                match self.ocr_image(payload) {
-                    Ok(text) if !text.trim().is_empty() => {
+                match self.ocr_image_timed(payload).await {
+                    Ok((text, _)) if !text.trim().is_empty() => {
                         insert_string(item, "ocr_text", text);
                     }
                     Ok(_) => {}

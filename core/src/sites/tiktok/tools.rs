@@ -451,7 +451,7 @@ impl Tool for GetVideosTool {
         let (media, media_init_error) = if download_video || ocr {
             let setup = (|| -> anyhow::Result<_> {
                 let mut processor =
-                    MediaProcessor::for_run_dir(ctx.output_dir(), self.llm_provider.clone())?;
+                    MediaProcessor::for_tool_context(ctx, self.llm_provider.clone())?;
                 processor.set_cloud_asr(transcribe_audio);
                 processor.set_billing_task_id(ctx.billing_task_id.as_deref());
                 Ok((processor, SafeTikTokMediaClient::new(self.page.clone())?))

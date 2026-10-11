@@ -29,25 +29,22 @@ impl MediaProcessor {
         else {
             return Duration::ZERO;
         };
-        let batch = tokio::task::spawn_blocking(move || {
-            let items = std::fs::read(&path)
-                .map(|bytes| vec![(0, bytes)])
-                .unwrap_or_default();
-            crate::media::ocr::ocr_images_bytes(items)
-        })
-        .await;
-        let Ok(mut batch) = batch else {
+        let Ok(bytes) = tokio::fs::read(&path).await else {
             return Duration::ZERO;
         };
-        self.timing.record("ocr_predict", batch.predict);
-        match batch.results.pop() {
-            Some((_, Ok(text))) if !text.trim().is_empty() => {
-                insert_string(video, "poster_ocr", text)
+        let elapsed = match self.ocr_image_timed(&bytes).await {
+            Ok((text, elapsed)) if !text.trim().is_empty() => {
+                insert_string(video, "poster_ocr", text);
+                elapsed
             }
-            Some((_, Err(err))) => insert_string(video, "poster_ocr_error", err),
-            _ => {}
-        }
-        batch.predict
+            Ok((_, elapsed)) => elapsed,
+            Err(err) => {
+                insert_string(video, "poster_ocr_error", format!("{err:#}"));
+                Duration::ZERO
+            }
+        };
+        self.timing.record("ocr_predict", elapsed);
+        elapsed
     }
 
     /// Download only a video note's poster (its cover image) to the run's
@@ -331,8 +328,8 @@ impl MediaProcessor {
                     Err(err) => insert_string(result, "poster_save_error", format!("{err:#}")),
                 }
                 if self.config.use_ocr {
-                    match self.ocr_image(&poster) {
-                        Ok(text) => insert_string(result, "poster_ocr", short(&text, 800)),
+                    match self.ocr_image_timed(&poster).await {
+                        Ok((text, _)) => insert_string(result, "poster_ocr", short(&text, 800)),
                         Err(err) => insert_string(result, "poster_ocr_error", format!("{err:#}")),
                     }
                 }

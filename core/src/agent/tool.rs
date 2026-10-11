@@ -22,6 +22,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::agent::run_state::RunState;
+use crate::media::RemoteOcrConfig;
 
 /// Machine-readable progress emitted by long-running tools. Core code reports
 /// state only; entrypoints decide whether and how to render it.
@@ -202,6 +203,7 @@ pub struct ToolContext {
     /// Desktop task identifier used to aggregate paid cloud tools with the
     /// same turn's hosted LLM usage. Other entrypoints leave this unset.
     pub billing_task_id: Option<String>,
+    remote_ocr: Option<RemoteOcrConfig>,
     pub run_state: Option<Arc<RunState>>,
     tool_dir: Option<PathBuf>,
     pub enabled_sites: Arc<Mutex<BTreeSet<String>>>,
@@ -300,6 +302,7 @@ impl ToolContext {
             active_tool_name: String::new(),
             background_media_generation: None,
             billing_task_id: None,
+            remote_ocr: None,
             run_state: None,
             tool_dir: None,
             enabled_sites: Arc::new(Mutex::new(BTreeSet::new())),
@@ -327,6 +330,26 @@ impl ToolContext {
     pub fn with_billing_task_id(mut self, task_id: Option<String>) -> Self {
         self.billing_task_id = task_id;
         self
+    }
+
+    pub fn with_remote_ocr(mut self, config: Option<RemoteOcrConfig>) -> Self {
+        self.remote_ocr = config;
+        self
+    }
+
+    pub fn remote_ocr(&self) -> Option<RemoteOcrConfig> {
+        self.remote_ocr.clone()
+    }
+
+    pub fn has_remote_ocr(&self) -> bool {
+        self.remote_ocr.is_some()
+    }
+
+    pub fn ocr_diagnostics(&self) -> Value {
+        self.remote_ocr
+            .as_ref()
+            .map(RemoteOcrConfig::diagnostics)
+            .unwrap_or_else(crate::media::ocr_diagnostics)
     }
 
     /// Best-effort progress delivery. A closed receiver must never fail the

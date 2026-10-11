@@ -19,7 +19,7 @@ use crate::agent::{make_run_dir, Backend as LlmProvider, Tool, ToolContext, Tool
 use crate::cdp::{with_snapshot_recording, PageSession};
 use crate::media::{
     background_media_is_stopped, background_video_download_semaphore,
-    current_background_media_generation, emit_background_media_event, ocr_diagnostics, ocr_warm_up,
+    current_background_media_generation, emit_background_media_event, ocr_warm_up,
     reserve_background_video_download, subscribe_background_media_cancellation, timing_delta,
     wait_for_background_media_cancellation, BackgroundMediaEvent, MediaProcessor, TimingSnapshot,
 };
@@ -1239,7 +1239,7 @@ fn media_for(
     transcribe_audio: bool,
 ) -> anyhow::Result<Option<MediaProcessor>> {
     if include_media || transcribe_audio {
-        let mut media = MediaProcessor::for_run_dir(ctx.output_dir(), llm_provider)?;
+        let mut media = MediaProcessor::for_tool_context(ctx, llm_provider)?;
         media.set_cloud_asr(transcribe_audio);
         media.set_billing_task_id(ctx.billing_task_id.as_deref());
         Ok(Some(media))
@@ -2976,7 +2976,7 @@ fn write_scan_perf(
 
     let mut perf = serde_json::Map::new();
     if !ocr_timings.is_empty() {
-        perf.insert("ocr".into(), ocr_diagnostics());
+        perf.insert("ocr".into(), ctx.ocr_diagnostics());
     }
     perf.insert("summary".into(), Value::Object(summary));
     perf.insert("notes".into(), Value::Array(note_reports));
@@ -2995,7 +2995,7 @@ fn write_cover_ocr_perf(
         return;
     }
     let perf = json!({
-        "ocr": ocr_diagnostics(),
+        "ocr": ctx.ocr_diagnostics(),
         "summary": {
             "covers": covers,
             "ocr_predict_ms": predict.as_millis() as u64,
@@ -3557,7 +3557,7 @@ impl Tool for GetNotesTool {
             && ctx.background_media_generation.is_some()
             && download_media_requested
             && !transcribe_audio;
-        if ocr {
+        if ocr && !ctx.has_remote_ocr() {
             tokio::task::spawn_blocking(ocr_warm_up);
         }
 
@@ -5123,7 +5123,7 @@ impl Tool for SearchTool {
             // Warm the OCR engine off the critical path so cover OCR doesn't pay
             // model-load latency; overlaps the search + card collection below.
             let ocr = self.always_ocr || get_bool(&input, "ocr", false);
-            if ocr {
+            if ocr && !ctx.has_remote_ocr() {
                 tokio::task::spawn_blocking(ocr_warm_up);
             }
             let xhs = XhsPageRuntime::new(&self.page);
@@ -5162,7 +5162,7 @@ impl Tool for SearchTool {
                         None,
                         None,
                     );
-                    let media = MediaProcessor::for_run_dir(ctx.output_dir(), None)?;
+                    let media = MediaProcessor::for_tool_context(ctx, None)?;
                     let cover_t0 = std::time::Instant::now();
                     let predict = media.ocr_cover_images(cards, XHS_HOME_URL).await;
                     let wall = cover_t0.elapsed();
@@ -5260,7 +5260,7 @@ impl Tool for SearchTool {
         // Warm the OCR engine off the critical path (model load + session init +
         // graph compile) so the first note's OCR doesn't pay it; overlaps the
         // search submit + first note open below.
-        if ocr {
+        if ocr && !ctx.has_remote_ocr() {
             tokio::task::spawn_blocking(ocr_warm_up);
         }
 
@@ -5956,7 +5956,7 @@ impl Tool for AuthorScanTool {
             && !transcribe_audio;
         // Warm the OCR engine off the critical path; overlaps opening the profile
         // and collecting note cards below.
-        if ocr {
+        if ocr && !ctx.has_remote_ocr() {
             tokio::task::spawn_blocking(ocr_warm_up);
         }
         let num_notes = input
@@ -6164,7 +6164,7 @@ impl Tool for AuthorScanTool {
                     None,
                     None,
                 );
-                let cover_media = MediaProcessor::for_run_dir(ctx.output_dir(), None)?;
+                let cover_media = MediaProcessor::for_tool_context(ctx, None)?;
                 let covers = cards_value.len();
                 let cover_t0 = std::time::Instant::now();
                 let predict = cover_media

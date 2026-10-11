@@ -83,11 +83,7 @@ impl std::fmt::Debug for HostToolEndpoint {
 
 impl HostToolEndpoint {
     fn validate(&self) -> Result<(), ProtocolError> {
-        if !(self.url.starts_with("http://127.0.0.1:")
-            || self.url.starts_with("http://[::1]:")
-            || self.url.starts_with("http://localhost:"))
-            || self.url.len() > 2_048
-        {
+        if !valid_loopback_http_url(&self.url) {
             return Err(ProtocolError::InvalidField {
                 field: "host_tool_endpoint",
                 message: "must be an HTTP loopback URL no larger than 2048 bytes".into(),
@@ -101,6 +97,33 @@ impl HostToolEndpoint {
         }
         Ok(())
     }
+}
+
+fn valid_loopback_http_url(value: &str) -> bool {
+    if value.len() > 2_048 || value.contains(['#', '\r', '\n']) {
+        return false;
+    }
+    let Some(rest) = value.strip_prefix("http://") else {
+        return false;
+    };
+    let Some((authority, path)) = rest.split_once('/') else {
+        return false;
+    };
+    if authority.contains('@') || path.is_empty() {
+        return false;
+    }
+    let port = if let Some(value) = authority.strip_prefix("[::1]:") {
+        value
+    } else {
+        let Some((host, port)) = authority.rsplit_once(':') else {
+            return false;
+        };
+        if host != "127.0.0.1" && host != "localhost" {
+            return false;
+        }
+        port
+    };
+    port.parse::<u16>().is_ok_and(|value| value > 0)
 }
 
 impl SessionBinding {
@@ -160,6 +183,8 @@ pub enum WorkerCommand {
         host_tools: Vec<HostToolDefinition>,
         #[serde(default)]
         host_tool_endpoint: Option<HostToolEndpoint>,
+        #[serde(default)]
+        remote_ocr: bool,
     },
     #[serde(rename = "run.cancel")]
     RunCancel {
@@ -204,6 +229,7 @@ impl WorkerCommand {
                 sequence_offset,
                 host_tools,
                 host_tool_endpoint,
+                remote_ocr,
                 ..
             } => {
                 binding.validate()?;
@@ -254,16 +280,20 @@ impl WorkerCommand {
                         });
                     }
                 }
-                match (host_tools.is_empty(), host_tool_endpoint) {
-                    (true, None) => {}
-                    (false, Some(endpoint)) => endpoint.validate()?,
-                    _ => {
-                        return Err(ProtocolError::InvalidField {
-                            field: "host_tool_endpoint",
-                            message: "endpoint and tool definitions must be provided together"
-                                .into(),
-                        });
-                    }
+                if let Some(endpoint) = host_tool_endpoint {
+                    endpoint.validate()?;
+                }
+                if (!host_tools.is_empty() || *remote_ocr) && host_tool_endpoint.is_none() {
+                    return Err(ProtocolError::InvalidField {
+                        field: "host_tool_endpoint",
+                        message: "is required by host tools or remote OCR".into(),
+                    });
+                }
+                if host_tools.is_empty() && host_tool_endpoint.is_some() && !*remote_ocr {
+                    return Err(ProtocolError::InvalidField {
+                        field: "host_tool_endpoint",
+                        message: "requires host tool definitions or remote OCR".into(),
+                    });
                 }
                 (*protocol_version, request_id)
             }
@@ -823,7 +853,7 @@ mod tests {
                 "input_schema":{"type":"object"}
             }],
             "host_tool_endpoint":{
-                "url":"https://example.com/internal/worker-tools",
+                "url":"http://localhost:8017@evil.example/internal/worker-tools",
                 "bearer_token":"secret-token-that-is-long-enough-123"
             }
         }))
@@ -835,6 +865,22 @@ mod tests {
                 ..
             })
         ));
+
+        let remote_only: WorkerCommand = serde_json::from_value(json!({
+            "type":"run.start",
+            "protocol_version":CONTROL_PROTOCOL_VERSION,
+            "request_id":"request-remote-ocr",
+            "binding":binding(),
+            "run_id":"run-remote-ocr",
+            "prompt":"read the post images",
+            "remote_ocr":true,
+            "host_tool_endpoint":{
+                "url":"http://127.0.0.1:8017/internal/worker-tools",
+                "bearer_token":"secret-token-that-is-long-enough-123"
+            }
+        }))
+        .expect("deserialize remote OCR endpoint");
+        remote_only.validate()?;
         Ok(())
     }
 

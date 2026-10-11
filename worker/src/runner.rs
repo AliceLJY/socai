@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use socai_core::agent::compaction::{compact_json_value, truncate};
 use socai_core::agent::note_store::load_notes;
 use socai_core::agent::{AgentEvent, Conversation, SharedTool, Tool, ToolContext, ToolResult};
+use socai_core::media::RemoteOcrConfig;
 use socai_core::runtime::{
     create_llm_provider_for_task, ensure_llm_provider_configured_for, run_agent_task,
     AgentRunConfig, SocaiRuntime,
@@ -519,6 +520,7 @@ pub struct RunSpec {
     pub max_tokens: Option<u32>,
     pub host_tools: Vec<HostToolDefinition>,
     pub host_tool_endpoint: Option<HostToolEndpoint>,
+    pub remote_ocr: bool,
 }
 
 pub struct PreparedRun {
@@ -665,6 +667,17 @@ async fn execute_run_inner(
         run_dir: Some(prepared.run_dir.clone()),
         session_id: Some(spec.binding.session_id.clone()),
         billing_task_id: Some(spec.run_id.clone()),
+        remote_ocr: match (spec.remote_ocr, spec.host_tool_endpoint.as_ref()) {
+            (true, Some(endpoint)) => Some(RemoteOcrConfig::new(
+                endpoint.url.clone(),
+                endpoint.bearer_token.clone(),
+                serde_json::json!({
+                    "binding": spec.binding,
+                    "run_id": spec.run_id,
+                }),
+            )?),
+            _ => None,
+        },
         ..AgentRunConfig::default()
     };
     if let Some(value) = spec.max_steps {
@@ -993,6 +1006,7 @@ mod tests {
             max_tokens: None,
             host_tools: Vec::new(),
             host_tool_endpoint: None,
+            remote_ocr: false,
         }
     }
 

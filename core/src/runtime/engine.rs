@@ -1038,6 +1038,7 @@ pub struct AgentRunConfig {
     pub session_id: Option<String>,
     pub background_media_generation: Option<u64>,
     pub billing_task_id: Option<String>,
+    pub remote_ocr: Option<crate::media::RemoteOcrConfig>,
     pub tool_failure_recovery: Option<SharedToolFailureRecovery>,
 }
 
@@ -1059,6 +1060,7 @@ impl Default for AgentRunConfig {
             session_id: None,
             background_media_generation: None,
             billing_task_id: None,
+            remote_ocr: None,
             tool_failure_recovery: None,
         }
     }
@@ -1088,6 +1090,7 @@ pub async fn run_agent_task(
         session_id: config.session_id,
         background_media_generation: config.background_media_generation,
         billing_task_id: config.billing_task_id,
+        remote_ocr: config.remote_ocr,
         tool_failure_recovery: config.tool_failure_recovery,
     };
     run_agent_with_events(task, llm_provider, tools, options, events_tx).await
