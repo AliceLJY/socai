@@ -15,6 +15,7 @@ pub const WORKER_CAPABILITIES: &[&str] = &[
     "bounded_frames.v1",
     "browser_session_recovery.v1",
     "evidence_records.v1",
+    "external_write_grants.v1",
     "interactive_login_resume.v1",
     "kernel_cdp_binding.v1",
     "host_tools.v1",

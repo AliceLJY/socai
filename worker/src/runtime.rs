@@ -148,6 +148,7 @@ pub async fn run_stdio_with_build_info(build: WorkerBuildInfo) -> Result<()> {
                         host_tools,
                         host_tool_endpoint,
                         remote_ocr,
+                        external_write_grants,
                         ..
                     } => {
                         if bound.as_ref() != Some(&binding) {
@@ -171,6 +172,7 @@ pub async fn run_stdio_with_build_info(build: WorkerBuildInfo) -> Result<()> {
                             host_tools,
                             host_tool_endpoint,
                             remote_ocr,
+                            external_write_grants,
                         };
                         let prepared = match prepare_run(&session_dir, &spec) {
                             Ok(value) => value,

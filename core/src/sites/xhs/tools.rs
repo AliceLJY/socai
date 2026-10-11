@@ -3965,6 +3965,10 @@ impl Tool for CommentTool {
         })
     }
 
+    fn external_write(&self) -> bool {
+        true
+    }
+
     async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let locator = required_string(&input, "note")?;
         let raw_text = input

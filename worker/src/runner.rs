@@ -16,8 +16,8 @@ use socai_core::runtime::{
 };
 use socai_core::sites::find_site;
 use socai_worker_protocol::{
-    EventSequencer, HostToolDefinition, HostToolEndpoint, SessionBinding, WorkerEvent,
-    WorkerEventPayload, WorkerOutput,
+    EventSequencer, ExternalWriteGrant, HostToolDefinition, HostToolEndpoint, SessionBinding,
+    WorkerEvent, WorkerEventPayload, WorkerOutput,
 };
 use tokio::sync::{broadcast, mpsc, Mutex};
 
@@ -27,7 +27,7 @@ const MAX_EVIDENCE_BYTES_PER_RESULT: usize = 384 * 1024;
 const MAX_EVIDENCE_RECORD_BYTES: usize = 128 * 1024;
 const MAX_EVENT_VALUE_BYTES: usize = 256 * 1024;
 const MAX_EVENT_TEXT_CHARS: usize = 60_000;
-const WORKER_PREAMBLE: &str = "You are running inside the socai Session Worker. Answer ordinary questions directly. For research requests, use the enabled browser or site tools to inspect real pages, gather source-linked evidence, and produce a concise report. Track explicit minimum source counts and satisfy them before finalizing when the sources are publicly reachable. When a site tool reports login_required or challenge_required, immediately call the matching platform login wait tool and keep the run active; the connected browser view lets the user complete either login or a verification challenge. Do not merely ask the user to act in a final answer. After the wait tool reports the page is ready, retry the original tool and continue. For LinkedIn post searches, use the supported content result type.";
+const WORKER_PREAMBLE: &str = "You are running inside the socai Session Worker. Reply in the user's language and answer ordinary questions directly. For research requests, use the enabled browser or site tools to inspect real pages and gather diverse source-linked evidence. Start the final response with a concise answer or executive summary, then organize supporting findings and actionable insights. Clearly distinguish captured observations from your inference, link material claims to the exact original sources, and never expose raw tool JSON. Track explicit minimum source counts and satisfy them before finalizing when the sources are publicly reachable. Treat a requested minimum as the target unless the user asks for exhaustive coverage: stop after enough diverse evidence is captured, and avoid synonymous searches that mostly duplicate existing evidence. When a site tool reports login_required or challenge_required, immediately call the matching platform login wait tool and keep the run active; the connected browser view lets the user complete either login or a verification challenge. Do not merely ask the user to act in a final answer. After the wait tool reports the page is ready, retry the original tool and continue. For LinkedIn post searches, use the supported content result type.";
 const RECOVERABLE_BROWSER_ERROR_MARKERS: [&str; 7] = [
     "cdp session is closed",
     "cdp connection is closed",
@@ -383,6 +383,10 @@ impl Tool for NamespacedTool {
         self.inner.input_schema()
     }
 
+    fn external_write(&self) -> bool {
+        self.inner.external_write()
+    }
+
     fn always_available(&self) -> bool {
         self.inner.always_available()
     }
@@ -402,6 +406,124 @@ impl Tool for NamespacedTool {
     async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         self.inner.call(input, ctx).await
     }
+}
+
+struct AuthorizedWriteTool {
+    inner: SharedTool,
+    grants: Mutex<Vec<Value>>,
+}
+
+impl AuthorizedWriteTool {
+    fn wrap(inner: SharedTool, grants: Vec<Value>) -> SharedTool {
+        Arc::new(Self {
+            inner,
+            grants: Mutex::new(grants),
+        })
+    }
+}
+
+fn json_contains_exact_subset(actual: &Value, expected: &Value) -> bool {
+    match (actual, expected) {
+        (Value::Object(actual), Value::Object(expected)) => expected.iter().all(|(key, value)| {
+            actual
+                .get(key)
+                .is_some_and(|actual| json_contains_exact_subset(actual, value))
+        }),
+        _ => actual == expected,
+    }
+}
+
+fn external_write_was_attempted(result: &ToolResult) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(&result.flat_text()) else {
+        return true;
+    };
+    if value
+        .get("submit_click_count")
+        .and_then(Value::as_u64)
+        .is_some_and(|count| count > 0)
+    {
+        return true;
+    }
+    if value.get("ok").and_then(Value::as_bool) == Some(true) {
+        return true;
+    }
+    value
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| matches!(status, "committed" | "reconciled" | "commit_unknown"))
+}
+
+#[async_trait]
+impl Tool for AuthorizedWriteTool {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+
+    fn input_schema(&self) -> Value {
+        self.inner.input_schema()
+    }
+
+    fn external_write(&self) -> bool {
+        true
+    }
+
+    fn always_available(&self) -> bool {
+        self.inner.always_available()
+    }
+
+    fn defer_until_site(&self) -> &str {
+        self.inner.defer_until_site()
+    }
+
+    fn is_available(&self, ctx: &ToolContext) -> bool {
+        self.inner.is_available(ctx)
+    }
+
+    fn effective_input(&self, input: &Value) -> Value {
+        self.inner.effective_input(input)
+    }
+
+    async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        let mut grants = self.grants.lock().await;
+        let Some(index) = grants
+            .iter()
+            .position(|grant| json_contains_exact_subset(&input, grant))
+        else {
+            return Ok(ToolResult::failure(
+                "This external write was not authorized with this exact target and content.",
+            ));
+        };
+        let result = self.inner.call(input, ctx).await;
+        if result.as_ref().map_or(true, external_write_was_attempted) {
+            grants.remove(index);
+        }
+        result
+    }
+}
+
+fn authorize_site_tools(
+    site: &str,
+    tools: Vec<SharedTool>,
+    grants: &[ExternalWriteGrant],
+) -> Vec<SharedTool> {
+    tools
+        .into_iter()
+        .filter_map(|tool| {
+            if !tool.external_write() {
+                return Some(tool);
+            }
+            let matching = grants
+                .iter()
+                .filter(|grant| grant.site == site && grant.tool == tool.name())
+                .map(|grant| grant.input.clone())
+                .collect::<Vec<_>>();
+            (!matching.is_empty()).then(|| AuthorizedWriteTool::wrap(tool, matching))
+        })
+        .collect()
 }
 
 struct HostTool {
@@ -521,6 +643,7 @@ pub struct RunSpec {
     pub host_tools: Vec<HostToolDefinition>,
     pub host_tool_endpoint: Option<HostToolEndpoint>,
     pub remote_ocr: bool,
+    pub external_write_grants: Vec<ExternalWriteGrant>,
 }
 
 pub struct PreparedRun {
@@ -628,6 +751,11 @@ async fn execute_run_inner(
             let factory = site.default_agent_tools.unwrap_or(site.agent_tools);
             factory(page, llm_provider.clone()).await?
         };
+        let site_tools = authorize_site_tools(
+            site.id,
+            site_tools,
+            &spec.external_write_grants,
+        );
         if multi_site {
             let mappings = site_tools
                 .iter()
@@ -650,6 +778,12 @@ async fn execute_run_inner(
             .default_agent_instructions
             .unwrap_or(site.agent_instructions);
         instruction_blocks.push(instructions(WORKER_PREAMBLE));
+    }
+    if !spec.external_write_grants.is_empty() {
+        instruction_blocks.push(
+            "External social writes are available only for the exact one-time grants attached to this run. Preserve the granted target and content exactly. Never retry a write after it is attempted, including when the commit result is unknown."
+                .into(),
+        );
     }
     instruction_blocks.extend(namespace_blocks);
     if instruction_blocks.is_empty() {
@@ -1007,6 +1141,7 @@ mod tests {
             host_tools: Vec::new(),
             host_tool_endpoint: None,
             remote_ocr: false,
+            external_write_grants: Vec::new(),
         }
     }
 
@@ -1311,5 +1446,47 @@ mod tests {
         assert!(tracker.take_changes(&run_dir).is_empty());
 
         std::fs::remove_dir_all(run_dir).expect("remove run directory");
+    }
+
+    #[test]
+    fn external_write_grants_match_an_exact_recursive_subset() {
+        let actual = json!({
+            "note":"note-1",
+            "text":"Exact comment",
+            "wait_seconds":30,
+            "metadata":{"source":"scheduled","attempt":1}
+        });
+        assert!(json_contains_exact_subset(
+            &actual,
+            &json!({"note":"note-1","text":"Exact comment"})
+        ));
+        assert!(json_contains_exact_subset(
+            &actual,
+            &json!({"metadata":{"source":"scheduled"}})
+        ));
+        assert!(!json_contains_exact_subset(
+            &actual,
+            &json!({"note":"note-2","text":"Exact comment"})
+        ));
+        assert!(!external_write_was_attempted(&ToolResult::failure(
+            json!({
+                "ok":false,
+                "reason":"login_required",
+                "submit_click_count":0
+            })
+            .to_string()
+        )));
+        assert!(external_write_was_attempted(&ToolResult::failure(
+            json!({
+                "ok":false,
+                "status":"commit_unknown",
+                "submit_click_count":1
+            })
+            .to_string()
+        )));
+        assert!(!json_contains_exact_subset(
+            &actual,
+            &json!({"note":"note-1","text":"Changed comment"})
+        ));
     }
 }

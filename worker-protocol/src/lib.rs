@@ -31,6 +31,55 @@ pub struct HostToolDefinition {
     pub input_schema: Value,
 }
 
+/// One exact, user-approved social write that a Worker may execute once.
+///
+/// `input` is matched as a recursive JSON subset so callers can bind the
+/// irreversible fields (for example the post URL and comment text) while the
+/// tool still applies safe runtime defaults such as a wait timeout.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExternalWriteGrant {
+    pub site: String,
+    pub tool: String,
+    pub input: Value,
+}
+
+impl ExternalWriteGrant {
+    fn validate(&self) -> Result<(), ProtocolError> {
+        for (field, value) in [("site", self.site.as_str()), ("tool", self.tool.as_str())] {
+            if value.is_empty()
+                || value.len() > 64
+                || !value.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'-')
+                })
+            {
+                return Err(ProtocolError::InvalidField {
+                    field: "external_write_grants",
+                    message: format!(
+                        "{field} must use 1 to 64 lowercase ASCII letters, digits, underscores, or hyphens"
+                    ),
+                });
+            }
+        }
+        let Some(input) = self.input.as_object() else {
+            return Err(ProtocolError::InvalidField {
+                field: "external_write_grants",
+                message: "grant input must be a non-empty JSON object".into(),
+            });
+        };
+        if input.is_empty()
+            || serde_json::to_vec(&self.input).is_ok_and(|value| value.len() > 32 * 1024)
+        {
+            return Err(ProtocolError::InvalidField {
+                field: "external_write_grants",
+                message: "grant input must be a non-empty JSON object no larger than 32 KiB".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
 impl HostToolDefinition {
     fn validate(&self) -> Result<(), ProtocolError> {
         if self.name.is_empty()
@@ -185,6 +234,8 @@ pub enum WorkerCommand {
         host_tool_endpoint: Option<HostToolEndpoint>,
         #[serde(default)]
         remote_ocr: bool,
+        #[serde(default)]
+        external_write_grants: Vec<ExternalWriteGrant>,
     },
     #[serde(rename = "run.cancel")]
     RunCancel {
@@ -230,6 +281,7 @@ impl WorkerCommand {
                 host_tools,
                 host_tool_endpoint,
                 remote_ocr,
+                external_write_grants,
                 ..
             } => {
                 binding.validate()?;
@@ -269,6 +321,24 @@ impl WorkerCommand {
                         field: "host_tools",
                         message: "supports at most 16 host tools".into(),
                     });
+                }
+                if external_write_grants.len() > 16 {
+                    return Err(ProtocolError::InvalidField {
+                        field: "external_write_grants",
+                        message: "supports at most 16 external write grants".into(),
+                    });
+                }
+                for grant in external_write_grants {
+                    grant.validate()?;
+                    if !enabled_sites.iter().any(|site| site == &grant.site) {
+                        return Err(ProtocolError::InvalidField {
+                            field: "external_write_grants",
+                            message: format!(
+                                "grant site {:?} must also appear in enabled_sites",
+                                grant.site
+                            ),
+                        });
+                    }
                 }
                 let mut names = BTreeSet::new();
                 for tool in host_tools {
@@ -813,6 +883,46 @@ mod tests {
             panic!("expected run.start");
         };
         assert_eq!(sequence_offset, 17);
+
+        let authorized: WorkerCommand = serde_json::from_value(json!({
+            "type":"run.start",
+            "protocol_version":CONTROL_PROTOCOL_VERSION,
+            "request_id":"request-write",
+            "binding":binding(),
+            "run_id":"run-write",
+            "prompt":"post the exact comment",
+            "enabled_sites":["xhs"],
+            "external_write_grants":[{
+                "site":"xhs",
+                "tool":"comment",
+                "input":{"note":"note-1","text":"Exact comment"}
+            }]
+        }))
+        .expect("deserialize authorized write");
+        authorized.validate()?;
+
+        let wrong_scope: WorkerCommand = serde_json::from_value(json!({
+            "type":"run.start",
+            "protocol_version":CONTROL_PROTOCOL_VERSION,
+            "request_id":"request-write",
+            "binding":binding(),
+            "run_id":"run-write",
+            "prompt":"post the exact comment",
+            "enabled_sites":["linkedin"],
+            "external_write_grants":[{
+                "site":"xhs",
+                "tool":"comment",
+                "input":{"note":"note-1","text":"Exact comment"}
+            }]
+        }))
+        .expect("deserialize wrong-scope write");
+        assert!(matches!(
+            wrong_scope.validate(),
+            Err(ProtocolError::InvalidField {
+                field: "external_write_grants",
+                ..
+            })
+        ));
         Ok(())
     }
 

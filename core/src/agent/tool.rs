@@ -765,6 +765,13 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &str;
     fn input_schema(&self) -> Value;
 
+    /// Whether calling this tool can mutate an external social account.
+    /// Hosted workers keep these tools hidden unless an exact, one-time grant
+    /// accompanies the run.
+    fn external_write(&self) -> bool {
+        false
+    }
+
     /// Tools that should always be exposed regardless of `enabled_sites`.
     fn always_available(&self) -> bool {
         false
