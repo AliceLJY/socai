@@ -18,7 +18,7 @@ const directions=[
 ];
 const steps=[{label:'搜索笔记',address:'xiaohongshu.com · 搜索'},{label:'阅读评论',address:'xiaohongshu.com · 评论'},{label:'对比选题',address:'xiaohongshu.com · 选题对照'},{label:'结果',address:'socai result'}];
 ---
-<WorkflowShowcase id="xiaohongshu-showcase" language="zh" platform="小红书" icon="/platforms/xiaohongshu.png" title="AI 账号选题研究" prompt="我在做一个面向产品经理的 AI 工具账号。看看小红书近一周哪些选题互动好、评论里还在追问什么，选 3 个我能做的题，列出参考笔记和切入角度。" steps={steps}>
+<WorkflowShowcase id="xiaohongshu-showcase" language="zh" platform="小红书" icon="/platforms/xiaohongshu.png" title="AI 账号选题研究" prompt="我在运营一个面向产品经理的 AI 工具账号。请调研小红书近一周互动表现较好的选题，以及评论区仍在追问的问题；从中选出 3 个适合我做的题目，并列出参考笔记和切入角度。" steps={steps}>
  <div class="cs-screen cs-process-screen" data-cs-screen="0" hidden><div class="cs-search-field">⌕ AI 工具实测 · 产品经理提效 · 近 7 天</div><div class="cs-cards">{[notes[0],notes[2],notes[4]].map(n=><article class="cs-card"><h3 class="xh-note-title">{n.title}</h3><p class="cs-detail-copy">{n.author}</p><p class="cs-detail-copy">{n.likes} 赞 · {n.saves} 收藏 · {n.comments} 评论</p></article>)}</div></div>
  <div class="cs-screen cs-process-screen" data-cs-screen="1" hidden><div class="cs-browser-comments">{[notes[0],notes[2],notes[4]].map(n=><div><span class="cs-reader-avatar">{n.id}</span><p>“{n.quote}”<small>{n.author} · {n.title}</small></p></div>)}</div></div>
  <div class="cs-screen cs-process-screen" data-cs-screen="2" hidden><div class="tt-breakdown">{directions.map(d=><div><strong>{d.title}</strong><p>{d.why}</p><span>{d.evidence}</span></div>)}</div></div>
