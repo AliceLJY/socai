@@ -354,6 +354,7 @@ fn should_record_worker_failure(error: &anyhow::Error) -> bool {
 }
 
 struct NamespacedTool {
+    namespace: String,
     name: String,
     description: String,
     inner: SharedTool,
@@ -362,6 +363,7 @@ struct NamespacedTool {
 impl NamespacedTool {
     fn wrap(namespace: &str, inner: SharedTool) -> SharedTool {
         Arc::new(Self {
+            namespace: namespace.to_string(),
             name: format!("{namespace}__{}", inner.name()),
             description: format!("[{namespace}] {}", inner.description()),
             inner,
@@ -385,6 +387,10 @@ impl Tool for NamespacedTool {
 
     fn external_write(&self) -> bool {
         self.inner.external_write()
+    }
+
+    fn parallel_scope(&self) -> Option<&str> {
+        (!self.inner.external_write()).then_some(self.namespace.as_str())
     }
 
     fn always_available(&self) -> bool {
@@ -737,6 +743,12 @@ async fn execute_run_inner(
     let mut instruction_blocks = Vec::new();
     let mut namespace_blocks = Vec::new();
     let multi_site = spec.enabled_sites.len() > 1;
+    if multi_site {
+        instruction_blocks.push(
+            "For independent read-only research across the requested platforms, issue one appropriate namespaced tool call per platform in the same assistant turn. Different platform namespaces have isolated pages and execute concurrently. Keep dependent calls, repeated calls on one platform, host actions, and every external write sequential."
+                .into(),
+        );
+    }
     if let Some(endpoint) = spec.host_tool_endpoint.as_ref() {
         tools.extend(spec.host_tools.iter().cloned().map(|definition| {
             HostTool::shared(

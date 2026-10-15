@@ -772,6 +772,16 @@ pub trait Tool: Send + Sync {
         false
     }
 
+    /// Independent resource scope for safe parallel dispatch.
+    ///
+    /// The agent loop only overlaps a batch when every tool opts in and every
+    /// returned scope is distinct. Tools sharing a browser page, account, or
+    /// other mutable resource must return the same scope (or `None`). External
+    /// writes should never opt in.
+    fn parallel_scope(&self) -> Option<&str> {
+        None
+    }
+
     /// Tools that should always be exposed regardless of `enabled_sites`.
     fn always_available(&self) -> bool {
         false

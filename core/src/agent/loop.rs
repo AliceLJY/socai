@@ -5,9 +5,8 @@
 //!     response = backend.send(system, messages, tool_schemas)
 //!     append assistant
 //!     if no tool calls: break
-//!     for tc in tool_calls:
-//!       result = dispatcher.call(tc)
-//!       append tool_result
+//!     dispatch tool_calls concurrently only across distinct opt-in scopes
+//!     append tool_results in the model's original order
 //! ```
 //!
 //! Cross-cutting concerns are split out:
@@ -18,11 +17,12 @@
 //! - `run_logging.rs` — canonical agent-run / LLM-step / tool-call records
 //! - `run_state.rs` — in-memory context compaction state
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures::future::join_all;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
@@ -37,7 +37,7 @@ use crate::agent::memory::{
     compact_messages_for_context, DEFAULT_COMPACT_AFTER_MESSAGES, DEFAULT_KEEP_RECENT_MESSAGES,
 };
 use crate::agent::report::report_with_artifacts;
-use crate::agent::run_logging::{make_run_dir, AgentRunRecorder};
+use crate::agent::run_logging::{make_run_dir, AgentRunRecorder, ToolCallRecorder};
 use crate::agent::run_state::RunState;
 use crate::agent::signature::tool_call_signature;
 use crate::agent::system_prompt::build_system_prompt;
@@ -180,6 +180,81 @@ pub struct AgentOutcome {
     /// This is not a terminal error: the final LLM summary completed successfully
     /// and `final_text` is visible.
     pub degraded_reason: Option<String>,
+}
+
+struct PendingParallelToolCall {
+    id: String,
+    name: String,
+    effective_input: Value,
+    repeat_count: u32,
+    sequence: u32,
+    recorder: ToolCallRecorder,
+    tool_ctx: ToolContext,
+    progress_rx: tokio::sync::mpsc::UnboundedReceiver<ToolProgressEvent>,
+}
+
+struct CompletedParallelToolCall {
+    pending: PendingParallelToolCall,
+    result: ToolResult,
+    error: Option<String>,
+    duration_ms: u64,
+}
+
+async fn execute_parallel_tool_call(
+    tools: &[SharedTool],
+    events: &broadcast::Sender<AgentEvent>,
+    mut pending: PendingParallelToolCall,
+    step: u32,
+) -> CompletedParallelToolCall {
+    let started = Instant::now();
+    let (result, error) = {
+        let dispatch = dispatch_tool(
+            tools,
+            &pending.name,
+            &pending.effective_input,
+            &pending.tool_ctx,
+        );
+        tokio::pin!(dispatch);
+        let mut progress_open = true;
+        loop {
+            tokio::select! {
+                outcome = &mut dispatch => break outcome,
+                progress = pending.progress_rx.recv(), if progress_open => {
+                    match progress {
+                        Some(progress) => emit(
+                            events,
+                            AgentEvent::ToolProgress {
+                                id: pending.id.clone(),
+                                step,
+                                sequence: pending.sequence,
+                                name: pending.name.clone(),
+                                progress,
+                            },
+                        ),
+                        None => progress_open = false,
+                    }
+                }
+            }
+        }
+    };
+    while let Ok(progress) = pending.progress_rx.try_recv() {
+        emit(
+            events,
+            AgentEvent::ToolProgress {
+                id: pending.id.clone(),
+                step,
+                sequence: pending.sequence,
+                name: pending.name.clone(),
+                progress,
+            },
+        );
+    }
+    CompletedParallelToolCall {
+        pending,
+        result,
+        error,
+        duration_ms: started.elapsed().as_millis() as u64,
+    }
 }
 
 pub async fn run_agent(
@@ -451,178 +526,304 @@ pub async fn run_agent_with_events(
         }
 
         let mut tool_result_blocks: Vec<Block> = Vec::new();
-        for (idx, tc) in response.tool_calls.iter().enumerate() {
-            let ToolCall { id, name, input } = tc;
-            ctx.active_tool_name = name.clone();
-
-            let sig = tool_call_signature(name, input);
-            let history = tool_call_history.entry(sig).or_default();
-            history.push(step);
-            let repeat_count = history.len() as u32;
-
-            let sequence = (idx + 1) as u32;
-            let effective_input = find_tool(&tools, name)
-                .map(|tool| tool.effective_input(input))
-                .unwrap_or_else(|| input.clone());
-            let tool_recorder =
-                run_recorder.start_tool_call(step, sequence, name, &effective_input)?;
-            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
-            let tool_ctx = ctx
-                .clone()
-                .with_tool_dir(tool_recorder.dir())
-                .with_progress_sender(Some(progress_tx));
-            emit(
-                &events,
-                AgentEvent::ToolCall {
+        let parallel_platform_batch = degraded_reason.is_none()
+            && options.tool_failure_recovery.is_none()
+            && tool_calls_have_distinct_parallel_scopes(&tools, &response.tool_calls);
+        if parallel_platform_batch {
+            info!(
+                step,
+                tool_calls = response.tool_calls.len(),
+                "dispatching independent platform tools concurrently"
+            );
+            let mut pending_calls = Vec::with_capacity(response.tool_calls.len());
+            for (idx, tc) in response.tool_calls.iter().enumerate() {
+                let ToolCall { id, name, input } = tc;
+                let sig = tool_call_signature(name, input);
+                let history = tool_call_history.entry(sig).or_default();
+                history.push(step);
+                let repeat_count = history.len() as u32;
+                let sequence = (idx + 1) as u32;
+                let effective_input = find_tool(&tools, name)
+                    .map(|tool| tool.effective_input(input))
+                    .unwrap_or_else(|| input.clone());
+                let recorder =
+                    run_recorder.start_tool_call(step, sequence, name, &effective_input)?;
+                let (progress_tx, progress_rx) = tokio::sync::mpsc::unbounded_channel();
+                let mut tool_ctx = ctx
+                    .clone()
+                    .with_tool_dir(recorder.dir())
+                    .with_progress_sender(Some(progress_tx));
+                tool_ctx.active_tool_name = name.clone();
+                emit(
+                    &events,
+                    AgentEvent::ToolCall {
+                        id: id.clone(),
+                        step,
+                        sequence,
+                        name: name.clone(),
+                        input: effective_input.clone(),
+                        repeat_count,
+                    },
+                );
+                run_state.note_tool_call(step, name, &effective_input);
+                pending_calls.push(PendingParallelToolCall {
                     id: id.clone(),
+                    name: name.clone(),
+                    effective_input,
+                    repeat_count,
+                    sequence,
+                    recorder,
+                    tool_ctx,
+                    progress_rx,
+                });
+            }
+            let completed_calls = join_all(
+                pending_calls
+                    .into_iter()
+                    .map(|pending| execute_parallel_tool_call(&tools, &events, pending, step)),
+            )
+            .await;
+            for completed in completed_calls {
+                let CompletedParallelToolCall {
+                    pending,
+                    result,
+                    error,
+                    duration_ms,
+                } = completed;
+                let PendingParallelToolCall {
+                    id,
+                    name,
+                    effective_input,
+                    repeat_count,
+                    sequence,
+                    recorder,
+                    ..
+                } = pending;
+                let duration_s = (duration_ms as f64) / 1000.0;
+                recorder.finish_blocks(&result.blocks, duration_ms, error.as_deref())?;
+                let result_content = tool_result_to_content(&result);
+                let content = content_for_log(&result_content);
+                run_trace.record_tool(
                     step,
                     sequence,
-                    name: name.clone(),
-                    input: effective_input.clone(),
-                    repeat_count,
-                },
-            );
-            run_state.note_tool_call(step, name, &effective_input);
-            let started = Instant::now();
-            let (result, error) = if let Some(reason) = degraded_reason.clone() {
-                let error = format!("tool skipped because recovery already failed: {reason}");
-                (ToolResult::text(format!("Error: {error}")), Some(error))
-            } else {
-                let mut retry_number = 0u8;
-                loop {
-                    let dispatch = dispatch_tool(&tools, name, &effective_input, &tool_ctx);
-                    tokio::pin!(dispatch);
-                    let mut progress_open = true;
-                    let outcome = loop {
-                        tokio::select! {
-                            outcome = &mut dispatch => break outcome,
-                            progress = progress_rx.recv(), if progress_open => {
-                                match progress {
-                                    Some(progress) => emit(
-                                        &events,
-                                        AgentEvent::ToolProgress {
-                                            id: id.clone(),
-                                            step,
-                                            sequence,
-                                            name: name.clone(),
-                                            progress,
-                                        },
-                                    ),
-                                    None => progress_open = false,
+                    &name,
+                    duration_ms,
+                    &effective_input,
+                    &content,
+                    error.as_deref(),
+                );
+                let flat = result.flat_text();
+                let summary = truncate_summary(&flat, 240);
+                emit(
+                    &events,
+                    AgentEvent::ToolResult {
+                        id: id.clone(),
+                        step,
+                        sequence,
+                        name: name.clone(),
+                        input: effective_input.clone(),
+                        content: content.clone(),
+                        summary: summary.clone(),
+                        duration_ms,
+                        error: error.clone(),
+                    },
+                );
+                run_state.note_tool_result(step, &name, &effective_input, &summary, duration_s);
+                let mut history_content = bound_content_for_history(&result_content);
+                if repeat_count >= 3 {
+                    history_content.insert(
+                        0,
+                        ToolResultContent::Text {
+                            text: format!(
+                                "[Note: you have called {name} with these exact arguments \
+                                 {repeat_count} times and the result is not changing. Stop \
+                                 repeating this call. Proceed with the information you already \
+                                 have — if something cannot be found, say so and complete the \
+                                 task with what is available.]"
+                            ),
+                        },
+                    );
+                }
+                tool_result_blocks.push(Block::ToolResult {
+                    tool_use_id: id,
+                    content: history_content,
+                });
+            }
+        } else {
+            for (idx, tc) in response.tool_calls.iter().enumerate() {
+                let ToolCall { id, name, input } = tc;
+                ctx.active_tool_name = name.clone();
+
+                let sig = tool_call_signature(name, input);
+                let history = tool_call_history.entry(sig).or_default();
+                history.push(step);
+                let repeat_count = history.len() as u32;
+
+                let sequence = (idx + 1) as u32;
+                let effective_input = find_tool(&tools, name)
+                    .map(|tool| tool.effective_input(input))
+                    .unwrap_or_else(|| input.clone());
+                let tool_recorder =
+                    run_recorder.start_tool_call(step, sequence, name, &effective_input)?;
+                let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+                let tool_ctx = ctx
+                    .clone()
+                    .with_tool_dir(tool_recorder.dir())
+                    .with_progress_sender(Some(progress_tx));
+                emit(
+                    &events,
+                    AgentEvent::ToolCall {
+                        id: id.clone(),
+                        step,
+                        sequence,
+                        name: name.clone(),
+                        input: effective_input.clone(),
+                        repeat_count,
+                    },
+                );
+                run_state.note_tool_call(step, name, &effective_input);
+                let started = Instant::now();
+                let (result, error) = if let Some(reason) = degraded_reason.clone() {
+                    let error = format!("tool skipped because recovery already failed: {reason}");
+                    (ToolResult::text(format!("Error: {error}")), Some(error))
+                } else {
+                    let mut retry_number = 0u8;
+                    loop {
+                        let dispatch = dispatch_tool(&tools, name, &effective_input, &tool_ctx);
+                        tokio::pin!(dispatch);
+                        let mut progress_open = true;
+                        let outcome = loop {
+                            tokio::select! {
+                                outcome = &mut dispatch => break outcome,
+                                progress = progress_rx.recv(), if progress_open => {
+                                    match progress {
+                                        Some(progress) => emit(
+                                            &events,
+                                            AgentEvent::ToolProgress {
+                                                id: id.clone(),
+                                                step,
+                                                sequence,
+                                                name: name.clone(),
+                                                progress,
+                                            },
+                                        ),
+                                        None => progress_open = false,
+                                    }
                                 }
                             }
-                        }
-                    };
-                    let recovery = match &options.tool_failure_recovery {
-                        Some(recovery) => recovery.recover_after_tool(name, retry_number).await,
-                        None => ToolRecoveryOutcome::NotNeeded,
-                    };
-                    match recovery {
-                        ToolRecoveryOutcome::NotNeeded => break outcome,
-                        ToolRecoveryOutcome::Recovered if retry_number == 0 => {
-                            retry_number = 1;
-                            info!(
-                                step,
-                                sequence,
-                                tool = name,
-                                "tool dependency recovered; retrying"
-                            );
-                        }
-                        ToolRecoveryOutcome::Recovered => {
-                            let reason =
-                                format!("{name} still requires recovery after its single retry");
-                            degraded_reason = Some(reason.clone());
-                            let (mut result, _) = outcome;
-                            result.blocks.insert(
+                        };
+                        let recovery = match &options.tool_failure_recovery {
+                            Some(recovery) => recovery.recover_after_tool(name, retry_number).await,
+                            None => ToolRecoveryOutcome::NotNeeded,
+                        };
+                        match recovery {
+                            ToolRecoveryOutcome::NotNeeded => break outcome,
+                            ToolRecoveryOutcome::Recovered if retry_number == 0 => {
+                                retry_number = 1;
+                                info!(
+                                    step,
+                                    sequence,
+                                    tool = name,
+                                    "tool dependency recovered; retrying"
+                                );
+                            }
+                            ToolRecoveryOutcome::Recovered => {
+                                let reason = format!(
+                                    "{name} still requires recovery after its single retry"
+                                );
+                                degraded_reason = Some(reason.clone());
+                                let (mut result, _) = outcome;
+                                result.blocks.insert(
                                 0,
                                 ToolResultBlock::text(format!(
                                     "[Tool execution stopped: {reason}. Use prior results for the final answer.]"
                                 )),
                             );
-                            break (result, Some(reason));
-                        }
-                        ToolRecoveryOutcome::Degraded { reason } => {
-                            degraded_reason = Some(reason.clone());
-                            let (mut result, _) = outcome;
-                            result.blocks.insert(
+                                break (result, Some(reason));
+                            }
+                            ToolRecoveryOutcome::Degraded { reason } => {
+                                degraded_reason = Some(reason.clone());
+                                let (mut result, _) = outcome;
+                                result.blocks.insert(
                                 0,
                                 ToolResultBlock::text(format!(
                                     "[Browser tools are unavailable: {reason}. Use prior results for the final answer.]"
                                 )),
                             );
-                            break (result, Some(reason));
+                                break (result, Some(reason));
+                            }
                         }
                     }
+                };
+                while let Ok(progress) = progress_rx.try_recv() {
+                    emit(
+                        &events,
+                        AgentEvent::ToolProgress {
+                            id: id.clone(),
+                            step,
+                            sequence,
+                            name: name.clone(),
+                            progress,
+                        },
+                    );
                 }
-            };
-            while let Ok(progress) = progress_rx.try_recv() {
+                let duration_ms = started.elapsed().as_millis() as u64;
+                let duration_s = (duration_ms as f64) / 1000.0;
+                tool_recorder.finish_blocks(&result.blocks, duration_ms, error.as_deref())?;
+
+                let result_content = tool_result_to_content(&result);
+                let content = content_for_log(&result_content);
+                run_trace.record_tool(
+                    step,
+                    sequence,
+                    name,
+                    duration_ms,
+                    &effective_input,
+                    &content,
+                    error.as_deref(),
+                );
+                let flat = result.flat_text();
+                let summary = truncate_summary(&flat, 240);
                 emit(
                     &events,
-                    AgentEvent::ToolProgress {
+                    AgentEvent::ToolResult {
                         id: id.clone(),
                         step,
                         sequence,
                         name: name.clone(),
-                        progress,
+                        input: effective_input.clone(),
+                        content: content.clone(),
+                        summary: summary.clone(),
+                        duration_ms,
+                        error: error.clone(),
                     },
                 );
-            }
-            let duration_ms = started.elapsed().as_millis() as u64;
-            let duration_s = (duration_ms as f64) / 1000.0;
-            tool_recorder.finish_blocks(&result.blocks, duration_ms, error.as_deref())?;
-
-            let result_content = tool_result_to_content(&result);
-            let content = content_for_log(&result_content);
-            run_trace.record_tool(
-                step,
-                sequence,
-                name,
-                duration_ms,
-                &effective_input,
-                &content,
-                error.as_deref(),
-            );
-            let flat = result.flat_text();
-            let summary = truncate_summary(&flat, 240);
-            emit(
-                &events,
-                AgentEvent::ToolResult {
-                    id: id.clone(),
-                    step,
-                    sequence,
-                    name: name.clone(),
-                    input: effective_input.clone(),
-                    content: content.clone(),
-                    summary: summary.clone(),
-                    duration_ms,
-                    error: error.clone(),
-                },
-            );
-            run_state.note_tool_result(step, name, &effective_input, &summary, duration_s);
-            let mut history_content = bound_content_for_history(&result_content);
-            // Break tight loops: when the model fires the *same* call with the
-            // same args repeatedly, the bare result won't change its mind. Tell
-            // it explicitly to stop and work with what it already has.
-            if repeat_count >= 3 {
-                history_content.insert(
-                    0,
-                    ToolResultContent::Text {
-                        text: format!(
-                            "[Note: you have called {name} with these exact arguments \
+                run_state.note_tool_result(step, name, &effective_input, &summary, duration_s);
+                let mut history_content = bound_content_for_history(&result_content);
+                // Break tight loops: when the model fires the *same* call with the
+                // same args repeatedly, the bare result won't change its mind. Tell
+                // it explicitly to stop and work with what it already has.
+                if repeat_count >= 3 {
+                    history_content.insert(
+                        0,
+                        ToolResultContent::Text {
+                            text: format!(
+                                "[Note: you have called {name} with these exact arguments \
                              {repeat_count} times and the result is not changing. Stop \
                              repeating this call. Proceed with the information you already \
                              have — if something cannot be found, say so and complete the \
                              task with what is available.]"
-                        ),
-                    },
-                );
-            }
-            tool_result_blocks.push(Block::ToolResult {
-                tool_use_id: id.clone(),
-                content: history_content,
-            });
+                            ),
+                        },
+                    );
+                }
+                tool_result_blocks.push(Block::ToolResult {
+                    tool_use_id: id.clone(),
+                    content: history_content,
+                });
 
-            ctx.active_tool_name.clear();
+                ctx.active_tool_name.clear();
+            }
         }
         if options.max_steps.saturating_sub(step) == 5 {
             tool_result_blocks.push(Block::Text {
@@ -998,6 +1199,18 @@ fn tool_schemas(tools: &[SharedTool], ctx: &ToolContext) -> Vec<ToolSchema> {
 
 fn find_tool<'a>(tools: &'a [SharedTool], name: &str) -> Option<&'a SharedTool> {
     tools.iter().find(|t| t.name() == name)
+}
+
+fn tool_calls_have_distinct_parallel_scopes(tools: &[SharedTool], calls: &[ToolCall]) -> bool {
+    if calls.len() < 2 {
+        return false;
+    }
+    let mut scopes = BTreeSet::new();
+    calls.iter().all(|call| {
+        find_tool(tools, &call.name)
+            .and_then(|tool| tool.parallel_scope())
+            .is_some_and(|scope| !scope.is_empty() && scopes.insert(scope.to_string()))
+    })
 }
 
 fn emit(events: &broadcast::Sender<AgentEvent>, event: AgentEvent) {
