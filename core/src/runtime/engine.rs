@@ -674,7 +674,11 @@ impl SocaiRuntime {
             runtime: self.clone(),
             target_id: Some(replacement_target_id),
         };
-        if !start_url.trim().is_empty() {
+        // `Target.createTarget` already created the replacement at about:blank.
+        // Navigating to the same synthetic URL again is unnecessary, and some
+        // hosted Chrome sessions do not emit another DOMContentLoaded event
+        // for that no-op navigation.
+        if should_navigate_start_url(start_url) {
             replacement.navigate_with_timeout(start_url, 60.0).await?;
         }
         page.replace_connection(replacement).await;
@@ -801,7 +805,7 @@ impl SocaiRuntime {
             runtime: self.clone(),
             target_id: Some(page.target_id().await),
         };
-        if !start_url.trim().is_empty() {
+        if should_navigate_start_url(start_url) {
             page.navigate_with_timeout(start_url, 60.0).await?;
         }
         pages.insert(page_key.to_string(), page.clone());
@@ -843,6 +847,11 @@ impl SocaiRuntime {
     async fn drop_site_sessions(&self) {
         self.site_pages.lock().await.clear();
     }
+}
+
+fn should_navigate_start_url(start_url: &str) -> bool {
+    let start_url = start_url.trim();
+    !start_url.is_empty() && !start_url.eq_ignore_ascii_case("about:blank")
 }
 
 impl Default for SocaiRuntime {
