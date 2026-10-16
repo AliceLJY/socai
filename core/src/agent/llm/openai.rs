@@ -774,6 +774,8 @@ struct WireResponse {
     choices: Vec<WireChoice>,
     #[serde(default)]
     usage: Value,
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1025,6 +1027,7 @@ impl Backend for OpenAICompatBackend {
 
         let parsed: WireResponse = response.json().await?;
         let provider_usage = parsed.usage.clone();
+        let response_model = parsed.model.as_deref().unwrap_or(&self.model);
         let choice = parsed
             .choices
             .into_iter()
@@ -1049,8 +1052,15 @@ impl Backend for OpenAICompatBackend {
             });
         }
 
-        let usage =
-            TokenUsage::from_openai_compatible(self.provider, &self.model, &provider_usage, true);
+        let mut usage = TokenUsage::from_openai_compatible(
+            self.provider,
+            response_model,
+            &provider_usage,
+            true,
+        );
+        if self.provider == Provider::OpenRouter {
+            usage.record_model(response_model);
+        }
         Ok(LLMResponse {
             text_blocks,
             tool_calls,

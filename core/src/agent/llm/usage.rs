@@ -4,6 +4,7 @@
 //! from the generated model catalog and is intentionally absent when no rate
 //! is known (or when OpenAI is reached through a subscription credential).
 
+use std::collections::BTreeMap;
 use std::ops::AddAssign;
 
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,18 @@ pub struct TokenUsage {
     pub reasoning_output_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<UsageCost>,
+    /// Per-model token totals for gateways that may fail over between models
+    /// during one agent run. Empty for providers that use one fixed model.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_usage: BTreeMap<String, ModelTokenUsage>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelTokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +107,7 @@ impl TokenUsage {
             cache_creation_input_tokens,
             reasoning_output_tokens,
             cost: None,
+            model_usage: BTreeMap::new(),
         };
         if estimate_cost {
             usage.estimate_cost(provider, model);
@@ -118,6 +132,7 @@ impl TokenUsage {
             cache_creation_input_tokens,
             reasoning_output_tokens: None,
             cost: None,
+            model_usage: BTreeMap::new(),
         };
         usage.estimate_cost(provider, model);
         usage
@@ -149,6 +164,22 @@ impl TokenUsage {
             pricing_source: pricing.source,
             rates_per_million_tokens: Some(rates),
         });
+    }
+
+    pub fn record_model(&mut self, model: &str) {
+        let model = model.trim();
+        if model.is_empty() {
+            return;
+        }
+        let usage = self.model_usage.entry(model.to_string()).or_default();
+        usage.input_tokens = usage.input_tokens.saturating_add(self.input_tokens);
+        usage.output_tokens = usage.output_tokens.saturating_add(self.output_tokens);
+        usage.cache_read_input_tokens = usage
+            .cache_read_input_tokens
+            .saturating_add(self.cache_read_input_tokens);
+        usage.cache_creation_input_tokens = usage
+            .cache_creation_input_tokens
+            .saturating_add(self.cache_creation_input_tokens);
     }
 }
 
@@ -190,6 +221,17 @@ impl AddAssign<&TokenUsage> for TokenUsage {
             (Some(_), Some(_)) => self.cost = None,
             _ => {}
         }
+        for (model, usage) in &rhs.model_usage {
+            let total = self.model_usage.entry(model.clone()).or_default();
+            total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
+            total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
+            total.cache_read_input_tokens = total
+                .cache_read_input_tokens
+                .saturating_add(usage.cache_read_input_tokens);
+            total.cache_creation_input_tokens = total
+                .cache_creation_input_tokens
+                .saturating_add(usage.cache_creation_input_tokens);
+        }
     }
 }
 
@@ -201,4 +243,35 @@ fn optional_u64(value: &Value, pointers: &[&str]) -> Option<u64> {
     pointers
         .iter()
         .find_map(|pointer| value.pointer(pointer).and_then(Value::as_u64))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_usage_survives_run_aggregation() {
+        let mut primary = TokenUsage::from_openai_compatible(
+            Provider::OpenRouter,
+            "deepseek/deepseek-v4.1-flash",
+            &serde_json::json!({"prompt_tokens": 10, "completion_tokens": 4}),
+            false,
+        );
+        primary.record_model("deepseek/deepseek-v4.1-flash");
+        let mut fallback = TokenUsage::from_openai_compatible(
+            Provider::OpenRouter,
+            "openai/gpt-6-luna",
+            &serde_json::json!({"prompt_tokens": 7, "completion_tokens": 3}),
+            false,
+        );
+        fallback.record_model("openai/gpt-6-luna");
+        primary += &fallback;
+
+        assert_eq!(primary.input_tokens, 17);
+        assert_eq!(
+            primary.model_usage["deepseek/deepseek-v4.1-flash"].input_tokens,
+            10
+        );
+        assert_eq!(primary.model_usage["openai/gpt-6-luna"].output_tokens, 3);
+    }
 }
