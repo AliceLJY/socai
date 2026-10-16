@@ -148,6 +148,18 @@ impl OpenAICompatBackend {
             Provider::Qwen | Provider::QwenIntl => {
                 extra.insert("enable_thinking".into(), Value::Bool(true));
             }
+            Provider::OpenRouter => {
+                let configured =
+                    std::env::var("SOCAI_OPENROUTER_FALLBACK_MODELS").unwrap_or_default();
+                let models = openrouter_fallback_models(&configured, &self.model);
+                if !models.is_empty() {
+                    // OpenRouter tries these models, in order, when the
+                    // primary `model` is unavailable, rate limited, or
+                    // rejects the request. Keep the list bounded so a bad
+                    // deployment setting cannot create an open-ended fanout.
+                    extra.insert("models".into(), json!(models));
+                }
+            }
             _ => {}
         }
         extra
@@ -237,6 +249,18 @@ impl OpenAICompatBackend {
     }
 }
 
+fn openrouter_fallback_models(configured: &str, primary: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    configured
+        .split(',')
+        .map(str::trim)
+        .filter(|model| !model.is_empty() && *model != primary)
+        .filter(|model| seen.insert((*model).to_string()))
+        .take(3)
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 fn validate_deepseek_tool_context(messages: &[Message]) -> anyhow::Result<()> {
     let mut pending = HashSet::new();
     for message in messages {
@@ -303,6 +327,22 @@ fn is_openai_reasoning_model(model: &str) -> bool {
 mod tests {
     use super::*;
     use crate::agent::llm::{Message, MessageContent, MessageRole};
+
+    #[test]
+    fn openrouter_fallbacks_are_ordered_deduplicated_and_bounded() {
+        assert_eq!(
+            openrouter_fallback_models(
+                " openai/gpt-6-luna, deepseek/deepseek-v4.1-flash, openai/gpt-6-luna, qwen/qwen3.7-max, anthropic/claude-sonnet-5 ",
+                "deepseek/deepseek-v4.1-flash",
+            ),
+            vec![
+                "openai/gpt-6-luna".to_string(),
+                "qwen/qwen3.7-max".to_string(),
+                "anthropic/claude-sonnet-5".to_string(),
+            ]
+        );
+        assert!(openrouter_fallback_models(" , primary, primary ", "primary").is_empty());
+    }
 
     #[test]
     fn parses_responses_sse_text_and_tool_call() {
