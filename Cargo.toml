@@ -40,8 +40,8 @@ libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-socai-core = { path = "core" }
-socai-worker-protocol = { path = "worker-protocol" }
+socai-core = { path = "core", version = "=0.6.7" }
+socai-worker-protocol = { path = "worker-protocol", version = "=0.1.0" }
 
 [workspace.lints.clippy]
 unwrap_used = "warn"

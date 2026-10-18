@@ -659,9 +659,11 @@ WorkBuddy packages with `plugins/workbuddy/build.sh` after changing their skill.
 
 ### Shared hosted worker library
 
-Hosted applications can depend on the `socai-worker` crate in this repository
-and keep their process entrypoint thin. Pin a reviewed Git commit rather than
-following a moving branch; use `run_stdio_with_build_info` to identify that
+Hosted applications can depend on the published `socai-worker = "=0.1.0"`
+crate and keep their process entrypoint thin. Its registry dependencies pin
+`socai-core = "=0.6.7"` and `socai-worker-protocol = "=0.1.0"`.
+For unpublished development builds, pin a reviewed Git commit rather than
+following a moving branch. Use `run_stdio_with_build_info` to identify that
 build in the host's version/capability handshake. `socai-core` remains the
 shared implementation for desktop, CLI and worker entrypoints.
 

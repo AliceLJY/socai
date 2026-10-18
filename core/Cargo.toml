@@ -3,6 +3,8 @@ name = "socai-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Shared browser and agent runtime for socai social research"
 
 [dependencies]
 serde.workspace = true
@@ -40,6 +42,8 @@ fs2 = "0.4"
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
 # 0.7.4 does not compile against current ort (missing CPUExecutionProvider).
 oar-ocr = "=0.7.1"
+oar-ocr-core = "=0.7.1"
+ort = "=2.0.0-rc.12"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
