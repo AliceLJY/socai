@@ -96,6 +96,24 @@ socai linkedin get-posts --post https://www.linkedin.com/posts/<id> --num-commen
 socai linkedin comment https://www.linkedin.com/posts/<id> --text 'Exact comment text'
 ```
 
+**WeChat 공식 계정** — 기사를 검색하고 전문을 읽습니다.
+
+```bash
+socai weixin search "personal agent" --num 10
+socai weixin search "personal agent" --num 3 --read
+socai weixin read 'https://mp.weixin.qq.com/s/ARTICLE_ID'
+```
+
+**Podcast** — 중국 및 해외 팟캐스트 프로그램과 에피소드를 검색하고 요약이나 전사 텍스트를 읽습니다. BidClub에 수록된 콘텐츠를 제공하며 브라우저나 로그인이 필요 없습니다.
+
+```bash
+socai podcast shows "Lex"
+socai podcast episodes --show <show_id> --limit 5
+socai podcast search "artificial intelligence" --limit 5
+socai podcast read <episode_slug> --section digest
+socai podcast read <episode_slug> --section transcript
+```
+
 필터, 댓글, 나머지 명령은 [사용 가이드](docs/guide.md#platform-command-reference)에 있습니다.
 
 ## 시작하기

@@ -97,6 +97,24 @@ socai linkedin get-posts --post https://www.linkedin.com/posts/<id> --num-commen
 socai linkedin comment https://www.linkedin.com/posts/<id> --text 'Exact comment text'
 ```
 
+**WeChat Official Accounts** — search articles and read full article text.
+
+```bash
+socai weixin search "personal agent" --num 10
+socai weixin search "personal agent" --num 3 --read
+socai weixin read 'https://mp.weixin.qq.com/s/ARTICLE_ID'
+```
+
+**Podcasts** — discover Chinese and international shows, search episodes, and read summaries or transcripts from BidClub’s indexed library. No browser or login required.
+
+```bash
+socai podcast shows "Lex"
+socai podcast episodes --show <show_id> --limit 5
+socai podcast search "artificial intelligence" --limit 5
+socai podcast read <episode_slug> --section digest
+socai podcast read <episode_slug> --section transcript
+```
+
 Filters, comments, and the rest of the commands are in the [user guide](docs/guide.md#platform-command-reference).
 
 ## Get started

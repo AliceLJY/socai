@@ -96,6 +96,24 @@ socai linkedin get-posts --post https://www.linkedin.com/posts/<id> --num-commen
 socai linkedin comment https://www.linkedin.com/posts/<id> --text 'Exact comment text'
 ```
 
+**微信公众号** — 搜索公众号文章、读取全文。
+
+```bash
+socai weixin search "personal agent" --num 10
+socai weixin search "personal agent" --num 3 --read
+socai weixin read 'https://mp.weixin.qq.com/s/ARTICLE_ID'
+```
+
+**Podcast（播客）** — 查找中外播客节目、搜索单集，读取摘要或转录文本；内容来自 BidClub 已收录的播客，无需浏览器或登录。
+
+```bash
+socai podcast shows "Lex"
+socai podcast episodes --show <show_id> --limit 5
+socai podcast search "artificial intelligence" --limit 5
+socai podcast read <episode_slug> --section digest
+socai podcast read <episode_slug> --section transcript
+```
+
 筛选、评论和其余命令见[使用指南](docs/guide.md#platform-command-reference)。
 
 ## 开始使用
