@@ -1,9 +1,9 @@
 //! Embedded rich social-post UI (SocaiV2 design, ported from the Claude Design handoff).
 //!
-//! A note is a Xiaohongshu post the agent saw/cited. Notes live in a per-run
-//! registry (note_id -> NoteData); the conversation embeds a rich card per
-//! note each search surfaced, the answer cites notes with `note:<id>` links
-//! upgraded into pills, and any reference opens one lightbox viewer. Media is served from disk via
+//! Archived social posts live in a per-run registry (note_id -> NoteData).
+//! Answers cite source URLs, which become title pills when a local record matches.
+//! Legacy `note:<id>` citations remain supported. References open the shared viewer.
+//! Media is served from disk via
 //! the Tauri asset protocol (convertFileSrc) — images/video play locally.
 
 import { platformLabel } from "../lib/platforms";
@@ -24,6 +24,7 @@ export function setNoteRegistry(notes: NoteData[] | undefined, runDir: string | 
     if (note && typeof note.note_id === "string" && note.note_id) REGISTRY[note.note_id] = normalizeNoteMedia(note);
   }
   RUN_DIR = runDir ?? "";
+  syncOpenArticle();
   // A note refresh replaces the cards under the pointer. Restore hover playback
   // once the new nodes exist and :hover applies to them.
   requestAnimationFrame(syncHoveredVideoPlayback);
@@ -34,6 +35,7 @@ export function mergeNoteRegistry(notes: NoteData[]): void {
     if (!note || typeof note.note_id !== "string" || !note.note_id) continue;
     REGISTRY[note.note_id] = mergeNoteData(REGISTRY[note.note_id], note);
   }
+  syncOpenArticle();
 }
 export function noteDataForRef(ref: string): NoteData | null {
   return REGISTRY[ref] ?? null;
@@ -47,7 +49,7 @@ function normalizeNoteMedia(note: NoteData): NoteData {
   if (!note.media?.length) return note;
   const media = new Map<string, NoteMedia>();
   for (const item of note.media) {
-    let key = `${item.kind}|${item.src ?? ""}|${item.poster ?? ""}`;
+    let key = item.source_url ? `source|${item.source_url}` : `${item.kind}|${item.src ?? ""}|${item.poster ?? ""}`;
     if (item.kind === "image" && item.src) {
       try {
         const url = new URL(item.src);
@@ -109,7 +111,12 @@ function mergeNoteData(current: NoteData | undefined, incoming: NoteData): NoteD
     author,
     stats,
     comments: mergeComments(current.comments, incoming.comments),
-    media: mediaScore(incoming.media) >= mediaScore(current.media) ? incoming.media : current.media,
+    media: incoming.site === 'weixin' && incoming.article_blocks && incoming.media
+      ? incoming.media.map(image => {
+          const previous = current.media?.find(old => old.source_url === image.source_url);
+          return !image.src && previous?.src ? { ...image, src: previous.src, download_state: 'ready' } : image;
+        })
+      : mediaScore(incoming.media) >= mediaScore(current.media) ? incoming.media : current.media,
     saved: Boolean(current.saved || incoming.saved),
     archived: Boolean(current.archived || incoming.archived),
   };
@@ -421,7 +428,8 @@ function statsRow(note: NoteData): string {
     .join("")}</span>`;
 }
 function avatar(note: NoteData, cls = ""): string {
-  return `<span class="note-author__avatar ${cls}" aria-hidden="true">${esc(authorInitial(note))}</span>`;
+  const src = assetUrl(note, note.author?.avatar);
+  return `<span class="note-author__avatar ${cls}" aria-hidden="true">${esc(authorInitial(note))}${src ? `<img src="${esc(src)}" alt="" />` : ''}</span>`;
 }
 
 // ── rich card (the timeline embed unit + answer sources) ────────────
@@ -440,6 +448,9 @@ function coverInner(note: NoteData, idx: number): string {
   return mediaFrame(note, media[i], "cover") + nav;
 }
 function renderCard(note: NoteData, density: "rich" | "compact" = "rich"): string {
+  if (note.site === "weixin") return `<div class="note-article-card" data-note-open="${esc(note.note_id)}" role="button" tabindex="0">
+    <div class="note-article-card__author">${avatar(note)}<span>${esc(note.author?.name || platformName(note))}</span></div>
+    <h3 class="t-body">${esc(note.title || '')}</h3><p class="t-small">${esc(note.excerpt || '')}</p></div>`;
   const title = esc(note.title || "");
   const name = esc((note.author && note.author.name) || "");
   const platform = platformName(note);
@@ -479,12 +490,24 @@ export function renderNoteCards(refs: string[], density: "rich" | "compact" = "r
 // ── answer citations (pills + hover preview) ────────────────────────
 function pillHTML(id: string, label: string, note: NoteData): string {
   const cover = coverOf(note);
+  const icon = note.site === "weixin" ? avatar(note, "note-cite__avatar") : mediaFrame(note, cover, "dot");
   return (
     `<span class="note-cite-wrap" data-note-cite="${esc(id)}">` +
     `<span class="note-cite" data-note-open="${esc(id)}" role="button" tabindex="0">` +
-    `<span class="note-cite__dot">${mediaFrame(note, cover, "dot")}</span>${esc(label)}` +
+    `<span class="note-cite__dot">${icon}</span>${esc(label)}` +
     `<span class="note-cite__kind">${kindIcon(note)}</span></span></span>`
   );
+}
+
+/** Ignore only fragments; signed query parameters remain part of the match. */
+function citationUrlKey(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    url.hash = "";
+    return url.href;
+  } catch { return null; }
 }
 
 /** Render the markdown answer, upgrading `note:<id>` links into citation pills.
@@ -506,23 +529,33 @@ export function renderNoteAnswer(src: string): string {
     holder.innerHTML = note ? pillHTML(id, label, note) : esc(label);
     a.replaceWith(...Array.from(holder.childNodes));
   });
-  // Older and imperfect agent answers sometimes cite an archived Instagram
-  // post by URL. Resolve that shortcode to its local card so those links open
-  // the same in-app viewer as an explicit note: citation.
+  // URLs are the public citation contract. Enrichment is local and optional:
+  // never fetch a destination merely to render a reference.
+  const byUrl = new Map<string, NoteData>();
+  for (const note of Object.values(REGISTRY)) {
+    const key = citationUrlKey(note.url);
+    if (key) byUrl.set(key, note);
+  }
   root.querySelectorAll('a[href^="https://"], a[href^="http://"]').forEach((a) => {
     const href = a.getAttribute("href");
     if (!href) return;
-    let url: URL;
-    try { url = new URL(href); } catch { return; }
-    if (url.hostname !== "instagram.com" && url.hostname !== "www.instagram.com") return;
-    const parts = url.pathname.split("/").filter(Boolean);
-    const kind = parts.findIndex((part) => part === "p" || part === "reel" || part === "tv");
-    if (kind < 0 || !parts[kind + 1]) return;
-    const id = `instagram:${parts[kind + 1]}`;
-    const note = resolveNote(id);
-    if (!note || note.site !== "instagram") return;
+    const key = citationUrlKey(href);
+    let note = key ? byUrl.get(key) : undefined;
+    // Retain Instagram's existing shortcode fallback for different share URLs.
+    if (!key) { a.textContent = href; return; }
+    const url = new URL(href);
+    if (!note && (url.hostname === "instagram.com" || url.hostname === "www.instagram.com")) {
+      const parts = url.pathname.split("/").filter(Boolean);
+      const kind = parts.findIndex((part) => part === "p" || part === "reel" || part === "tv");
+      const candidate = kind >= 0 && parts[kind + 1] ? resolveNote(`instagram:${parts[kind + 1]}`) : null;
+      if (candidate?.site === "instagram") note = candidate;
+    }
+    if (!note?.title?.trim()) {
+      a.textContent = href;
+      return;
+    }
     const holder = doc.createElement("span");
-    holder.innerHTML = pillHTML(id, a.textContent || note.title || id, note);
+    holder.innerHTML = pillHTML(note.note_id, note.title, note);
     a.replaceWith(...Array.from(holder.childNodes));
   });
   return root.innerHTML;
@@ -583,6 +616,34 @@ function commentHTML(comment: NoteComment, isReply = false): string {
       </div>
     </div>`;
 }
+function articleImage(note: NoteData, index: number): string {
+  const image = note.media?.[index];
+  const src = image?.src ? assetUrl(note, image.src) : '';
+  const label = image?.download_state === 'failed' || image?.download_state === 'cancelled'
+    ? t('note.articleImageUnavailable') : t('note.articleImageLoading');
+  return `<figure class="note-article-image" data-image-index="${index}" data-image-src="${esc(src)}">
+    ${src ? `<img src="${esc(src)}" alt="${esc(image?.alt || '')}" loading="lazy" />` : ''}
+    <figcaption${src ? ' hidden' : ''}>${esc(label)}</figcaption></figure>`;
+}
+function articleBody(note: NoteData): string {
+  if (!note.article_blocks?.length) return `<p>${esc(note.content || note.excerpt || '')}</p>`;
+  return note.article_blocks.map(block => block.type === 'text'
+    ? `<p>${esc(block.text)}</p>` : articleImage(note, block.image_index)).join('');
+}
+function syncOpenArticle(): void {
+  const panel = document.querySelector<HTMLElement>('[data-note-article]');
+  if (!panel) return;
+  const note = resolveNote(panel.dataset.noteArticle || '');
+  if (!note) return;
+  panel.querySelectorAll<HTMLElement>('[data-image-index]').forEach(figure => {
+    const index = Number(figure.dataset.imageIndex);
+    const src = assetUrl(note, note.media?.[index]?.src);
+    if (figure.dataset.imageSrc !== src || !src) figure.outerHTML = articleImage(note, index);
+  });
+  const author = panel.querySelector('.note-view__author .note-author__avatar');
+  if (author) author.outerHTML = avatar(note, 'note-view__avatar');
+}
+
 function viewPanel(note: NoteData): string {
   const name = esc((note.author && note.author.name) || "");
   const authorUrl = (note.author && note.author.url) || "";
@@ -634,6 +695,13 @@ function viewerHTML(note: NoteData): string {
   const corner = note.url
     ? `<button type="button" class="note-viewer-corner" data-note-external="${esc(note.url)}" title="${esc(t("note.openExternal"))}" aria-label="${esc(t("note.openExternal"))}">${IC.external()}</button>`
     : `<button type="button" class="note-viewer-corner" data-note-close aria-label="close">${IC.close()}</button>`;
+  if (note.site === "weixin") return `<div class="note-viewer-backdrop" data-note-close>
+    <div class="note-viewer-panel note-viewer-panel--article" role="dialog" aria-label="${esc(note.title || 'article')}" data-note-stop data-note-article="${esc(note.note_id)}">
+      ${corner}<div class="note-view__author">${avatar(note, 'note-view__avatar')}<span class="note-view__author-name">${esc(note.author?.name || '')}</span></div>
+      <article class="note-article-scroll"><h1 class="t-h2">${esc(note.title || '')}</h1>
+        <p class="t-small note-view__date">${esc(fmtDate(note.posted_at))}</p>
+        <div class="note-article-content t-body">${articleBody(note)}</div></article>
+    </div></div>`;
   return `
     <div class="note-viewer-backdrop" data-note-close>
       <div class="note-viewer-panel" role="dialog" aria-label="${esc(note.title || "note")}" data-note-stop>
@@ -930,3 +998,16 @@ export function bindNoteInteractions(): void {
     true,
   );
 }
+
+// Keep a readable fallback when an archived asset is missing or undecodable.
+document.addEventListener('error', event => {
+  const image = event.target;
+  if (!(image instanceof HTMLImageElement)) return;
+  if (image.closest('.note-author__avatar')) image.hidden = true;
+  const figure = image.closest('.note-article-image');
+  if (figure) {
+    image.hidden = true;
+    const caption = figure.querySelector('figcaption');
+    if (caption) { caption.hidden = false; caption.textContent = t('note.articleImageUnavailable'); }
+  }
+}, true);

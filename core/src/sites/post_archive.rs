@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::agent::ToolContext;
 use crate::cdp::PageSession;
@@ -67,7 +68,10 @@ pub fn persist_site_tool_result(
     }
 
     for (note_id, record) in records_for_site_tool(site_id, tool_name, result) {
-        upsert_record(ctx, &note_id, record);
+        upsert_record(ctx, &note_id, record.clone());
+        if site_id == "weixin" {
+            super::weixin::media::schedule(ctx, &note_id, &record);
+        }
     }
 
     if tool_name == "comments" {
@@ -725,6 +729,7 @@ pub fn records_for_site_tool(
     result: &Value,
 ) -> Vec<(String, Value)> {
     match site_id {
+        "weixin" => weixin_records(tool_name, result),
         "linkedin" => linkedin_records(tool_name, result),
         "instagram" => instagram_records(tool_name, result),
         "dy" | "tiktok" => video_platform_records(site_id, tool_name, result),
@@ -737,6 +742,7 @@ fn is_content_tool(tool_name: &str) -> bool {
         tool_name,
         "searchResults"
             | "profilePosts"
+            | "articleDetail"
             | "postDetail"
             | "comments"
             | "videoCards"
@@ -773,6 +779,34 @@ pub fn merge_post_record(existing: &mut Value, incoming: &Value) {
         let Some(target) = existing.as_object_mut() else {
             return;
         };
+        if source.get("site").and_then(Value::as_str) == Some("weixin") {
+            if key == "article_blocks" {
+                target.insert(key.clone(), value.clone());
+                continue;
+            }
+            if key == "media" {
+                // Ordered article blocks reference this observation's image array.
+                let mut ordered = value.clone();
+                for image in ordered.as_array_mut().into_iter().flatten() {
+                    if image["src"].as_str().is_none() {
+                        if let Some(old) = target
+                            .get("media")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .find(|old| {
+                                old["source_url"] == image["source_url"] && old["src"].is_string()
+                            })
+                        {
+                            image["src"] = old["src"].clone();
+                            image["download_state"] = json!("ready");
+                        }
+                    }
+                }
+                target.insert(key.clone(), ordered);
+                continue;
+            }
+        }
         if let Some(current) = target.get_mut(key) {
             merge_record_field(key, current, value);
         } else {
@@ -891,6 +925,9 @@ pub fn deduplicate_post_media(record: &mut Value) {
 }
 
 fn media_key(value: &Value) -> String {
+    if let Some(source) = value["source_url"].as_str() {
+        return format!("source|{source}");
+    }
     let kind = text_at(value, &["kind", "type"]);
     let source = text_at(value, &["src", "url"]);
     if kind == "image" {
@@ -949,6 +986,67 @@ fn comment_key(comment: &Value) -> String {
         text_at(comment, &["author"]),
         text_at(comment, &["text"])
     )
+}
+
+// Sogou cards have expiring redirect URLs, not stable article identities.
+// Archive only verified article reads; preserve search cards in the JSON artifact.
+fn weixin_records(tool_name: &str, result: &Value) -> Vec<(String, Value)> {
+    match tool_name {
+        "articleDetail" | "read_weixin_article" => weixin_record(result).into_iter().collect(),
+        "searchResults" | "search_weixin_articles" => result["results"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|card| weixin_record(&card["article"]))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn weixin_record(item: &Value) -> Option<(String, Value)> {
+    if item["ok"] == false {
+        return None;
+    }
+    let content = text_at(item, &["text"]);
+    let title = text_at(item, &["title"]);
+    let author = text_at(item, &["author"]);
+    let url = text_at(item, &["url"]);
+    let parsed = reqwest::Url::parse(&url).ok()?;
+    if content.is_empty() || title.is_empty() || parsed.host_str() != Some("mp.weixin.qq.com") {
+        return None;
+    }
+    let article_id = text_at(item, &["article_id"]);
+    let identity = if !article_id.is_empty() {
+        article_id
+    } else if parsed.path().starts_with("/s/") {
+        parsed.path().to_string()
+    } else {
+        // Signed destinations change per search. If no publisher ID is exposed,
+        // use the observed document rather than an expiring redirect token.
+        format!("{author}\n{title}\n{content}")
+    };
+    let native_id = format!("{:x}", Sha256::digest(identity.as_bytes()));
+    let mut record = base_record("weixin", &native_id, &url, title, &content);
+    insert_author(&mut record, &author, "", "");
+    if let Some(avatar) = item["author_avatar"].as_str().filter(|v| !v.is_empty()) {
+        record.entry("author").or_insert_with(|| json!({}))["avatar_source"] = json!(avatar);
+    }
+    if let Some(blocks) = item["blocks"].as_array() {
+        record.insert("article_blocks".into(), json!(blocks));
+    }
+    let images: Vec<Value> = item["images"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|image| {
+            json!({"kind":"image", "source_url":image["url"], "alt":image["alt"],
+            "width":image["width"], "height":image["height"], "download_state":"loading"})
+        })
+        .collect();
+    record.insert("media".into(), json!(images));
+    insert_posted_at(&mut record, &text_at(item, &["published_at"]));
+    record.insert("level".into(), json!("deep"));
+    Some((post_note_id("weixin", &native_id), Value::Object(record)))
 }
 
 fn linkedin_records(tool_name: &str, result: &Value) -> Vec<(String, Value)> {
@@ -1562,6 +1660,7 @@ fn post_note_id(site_id: &str, native_id: &str) -> String {
 
 fn site_name(site_id: &str) -> &'static str {
     match site_id {
+        "weixin" => "WeChat",
         "linkedin" => "LinkedIn",
         "instagram" => "Instagram",
         "dy" => "Douyin",
