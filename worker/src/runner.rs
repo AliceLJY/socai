@@ -773,11 +773,7 @@ async fn execute_run_inner(
             let factory = site.default_agent_tools.unwrap_or(site.agent_tools);
             factory(page, llm_provider.clone()).await?
         };
-        let site_tools = authorize_site_tools(
-            site.id,
-            site_tools,
-            &spec.external_write_grants,
-        );
+        let site_tools = authorize_site_tools(site.id, site_tools, &spec.external_write_grants);
         if multi_site {
             let mappings = site_tools
                 .iter()

@@ -657,6 +657,31 @@ content opt-out, and correlation fields are documented in
 The general external-agent skill is `skills/socai-cli/SKILL.md`. Rebuild the
 WorkBuddy packages with `plugins/workbuddy/build.sh` after changing their skill.
 
+### Shared hosted worker library
+
+Hosted applications can depend on the `socai-worker` crate in this repository
+and keep their process entrypoint thin. Pin a reviewed Git commit rather than
+following a moving branch; use `run_stdio_with_build_info` to identify that
+build in the host's version/capability handshake. `socai-core` remains the
+shared implementation for desktop, CLI and worker entrypoints.
+
+Hosted workers can opt into a loopback, bearer-authenticated OCR service through
+their host-tool endpoint. Leaving this unset preserves bundled local OCR for
+desktop and CLI. Native social write tools are exposed to a worker only when
+the host supplies exact, one-time `external_write_grants`; read-only research
+does not grant publishing permission. Independent platform tool scopes may run
+concurrently, while calls within one scope and external writes remain ordered.
+Browserless site adapters keep their browser-free execution path.
+
+For OpenRouter only, `SOCAI_OPENROUTER_FALLBACK_MODELS` accepts a bounded,
+comma-separated fallback list. Usage records retain the model actually served
+so hosts can attribute fallback costs correctly. With the setting absent, the
+primary model behavior is unchanged.
+
+Validate changes with `cargo test --locked -p socai-core -p socai-worker -p
+socai-worker-protocol` and compile the consuming CLI/desktop entrypoints before
+updating a host's pinned dependency.
+
 ### HTTP-only site adapters
 
 Native adapters expose `browserless_tools(task, language)` to skip page acquisition

@@ -8,7 +8,7 @@ mod runtime;
 pub use runtime::{run_stdio, run_stdio_with_build_info};
 
 pub const WORKER_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const SOCAI_CORE_VERSION: &str = "0.6.5";
+pub const SOCAI_CORE_VERSION: &str = "0.6.7";
 pub const SOCAI_CORE_REVISION: &str = "workspace";
 pub const WORKER_CAPABILITIES: &[&str] = &[
     "agent_events.v1",
