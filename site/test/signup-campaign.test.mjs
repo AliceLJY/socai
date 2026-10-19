@@ -12,13 +12,13 @@ test('countdown uses the agreed Los Angeles cutoff and never goes negative', () 
   assert.equal(campaignCountdown(end - 1), '00d 00h 00m 01s');
   assert.equal(campaignCountdown(end), null);
   assert.equal(campaignCountdown(end + 1000), null);
-  assert.equal(SIGNUP_CAMPAIGN.credits, 300);
+  assert.equal(SIGNUP_CAMPAIGN.credits, 500);
 });
 
 test('all supported languages advertise the same actual signup reward', () => {
   for (const lang of ['zh', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt']) {
     const text = campaignCopy(lang);
-    assert.ok(text.offer.includes('300'));
+    assert.ok(text.offer.includes('500'));
     assert.ok(text.invite && text.close && text.title);
   }
   assert.equal(campaignCopy('zh-CN').invite, '邀请活动');
