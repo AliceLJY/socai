@@ -152,6 +152,16 @@ pub fn xhs_macro_tools_with_llm_provider(
     page: Arc<PageSession>,
     llm_provider: Option<Arc<dyn LlmProvider>>,
 ) -> Vec<Arc<dyn Tool>> {
+    xhs_macro_tools_with_ocr_policy(page, llm_provider, true)
+}
+
+/// Preserve desktop's local OCR default, while hosted remote OCR is explicit
+/// per call. Media capture remains enabled in either case for source previews.
+pub fn xhs_macro_tools_with_ocr_policy(
+    page: Arc<PageSession>,
+    llm_provider: Option<Arc<dyn LlmProvider>>,
+    always_ocr: bool,
+) -> Vec<Arc<dyn Tool>> {
     let history = Arc::new(XhsHistoryStore::open_default());
     let asr_enabled = true;
     // The app/TUI agent interface always downloads note media so the offline
@@ -163,7 +173,7 @@ pub fn xhs_macro_tools_with_llm_provider(
             llm_provider: llm_provider.clone(),
             history: history.clone(),
             always_download_media: true,
-            always_ocr: true,
+            always_ocr,
             asr_enabled,
         }) as Arc<dyn Tool>,
         Arc::new(SearchTool {
@@ -171,14 +181,14 @@ pub fn xhs_macro_tools_with_llm_provider(
             llm_provider,
             history: history.clone(),
             always_download_media: true,
-            always_ocr: true,
+            always_ocr,
             asr_enabled,
         }) as Arc<dyn Tool>,
         Arc::new(AuthorScanTool {
             page: page.clone(),
             history,
             always_download_media: true,
-            always_ocr: true,
+            always_ocr,
             asr_enabled,
         }),
         Arc::new(AlbumTool { page: page.clone() }),
@@ -6321,6 +6331,15 @@ mod tests {
 
         assert!(options.download_media);
         assert!(!options.include_media);
+        // Hosted remote OCR remains opt-in, without dropping source media.
+        let hosted = effective_macro_input(&json!({"ocr":false}), Some(3), true, false);
+        assert_eq!(hosted["ocr"], json!(false));
+        assert_eq!(hosted["download_media"], json!(true));
+        assert_eq!(hosted["num_notes"], json!(3));
+        let explicit = effective_macro_input(&json!({"ocr":true}), Some(3), true, false);
+        assert_eq!(explicit["ocr"], json!(true));
+        let desktop = effective_macro_input(&json!({"ocr":false}), Some(3), true, true);
+        assert_eq!(desktop["ocr"], json!(true));
     }
 
     #[test]

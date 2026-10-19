@@ -15,6 +15,7 @@ use socai_core::runtime::{
     AgentRunConfig, SocaiRuntime,
 };
 use socai_core::sites::find_site;
+use socai_core::sites::xhs::tools::xhs_macro_tools_with_ocr_policy;
 use socai_worker_protocol::{
     EventSequencer, ExternalWriteGrant, HostToolDefinition, HostToolEndpoint, SessionBinding,
     WorkerEvent, WorkerEventPayload, WorkerOutput,
@@ -28,6 +29,7 @@ const MAX_EVIDENCE_RECORD_BYTES: usize = 128 * 1024;
 const MAX_EVENT_VALUE_BYTES: usize = 256 * 1024;
 const MAX_EVENT_TEXT_CHARS: usize = 60_000;
 const WORKER_PREAMBLE: &str = "You are running inside the socai Session Worker. Reply in the user's language and answer ordinary questions directly. For research requests, use the enabled browser or site tools to inspect real pages and gather diverse source-linked evidence. Start the final response with a concise answer or executive summary, then organize supporting findings and actionable insights. Clearly distinguish captured observations from your inference, link material claims to the exact original sources, and never expose raw tool JSON. Track explicit minimum source counts and satisfy them before finalizing when the sources are publicly reachable. Treat a requested minimum as the target unless the user asks for exhaustive coverage: stop after enough diverse evidence is captured, and avoid synonymous searches that mostly duplicate existing evidence. When a site tool reports login_required or challenge_required, immediately call the matching platform login wait tool and keep the run active; the connected browser view lets the user complete either login or a verification challenge. Do not merely ask the user to act in a final answer. After the wait tool reports the page is ready, retry the original tool and continue. For LinkedIn post searches, use the supported content result type.";
+const HOSTED_REMOTE_RESEARCH_POLICY: &str = "Hosted runtime: OCR here uses a metered remote vision service, not the near-free local OCR described in desktop knowledge. XHS OCR is opt-in per call. First discover relevant sources with preview=true and ocr=false; then read selected notes in small batches, using OCR only where image text is necessary. Keep media capture for previews. Cover every requested content type and date interval before deep enrichment: for mixed image/video requests, sample both early rather than spending the entire tool budget on one large carousel batch. Verify publication dates; popularity sorting does not enforce a historical date range. Expand batches until explicit source minimums and the question's scope are met; never call a partial sample complete. For bounded repository comparisons, collect a representative shortlist with authoritative metadata and stop once the requested comparison is supported instead of exhaustively exploring unrelated repositories. If the user has not specified which website/account to connect, ask for that information immediately without enumerating unrelated platform tools. Never claim a login or external action succeeded without evidence.";
 const RECOVERABLE_BROWSER_ERROR_MARKERS: [&str; 7] = [
     "cdp session is closed",
     "cdp connection is closed",
@@ -770,8 +772,18 @@ async fn execute_run_inner(
             factory(&spec.prompt, None)
         } else {
             let page = runtime.ensure_site_page(site.id, site.home_url).await?;
-            let factory = site.default_agent_tools.unwrap_or(site.agent_tools);
-            factory(page, llm_provider.clone()).await?
+            if site.id == "xhs" && spec.remote_ocr && spec.host_tool_endpoint.is_some() {
+                // This policy belongs in shared socai-core, not a hosted fork.
+                // Other factories and desktop's local OCR behavior are unchanged.
+                socai_core::sites::browser_script::with_browser_script(
+                    "xhs",
+                    page.clone(),
+                    xhs_macro_tools_with_ocr_policy(page, Some(llm_provider.clone()), false),
+                )?
+            } else {
+                let factory = site.default_agent_tools.unwrap_or(site.agent_tools);
+                factory(page, llm_provider.clone()).await?
+            }
         };
         let site_tools = authorize_site_tools(site.id, site_tools, &spec.external_write_grants);
         if multi_site {
@@ -801,6 +813,9 @@ async fn execute_run_inner(
         instruction_blocks.push(write_instructions);
     }
     instruction_blocks.extend(namespace_blocks);
+    if spec.remote_ocr && spec.host_tool_endpoint.is_some() {
+        instruction_blocks.push(HOSTED_REMOTE_RESEARCH_POLICY.into());
+    }
     if instruction_blocks.is_empty() {
         instruction_blocks.push(WORKER_PREAMBLE.into());
     }
