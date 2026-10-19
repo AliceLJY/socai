@@ -242,10 +242,14 @@ html[data-language="zh"] .hero h1 {
   align-items: center;
   justify-content: center;
   gap: 12px 22px;
-  max-width: 640px;
+  max-width: 760px;
   margin: 0 auto 22px;
   padding: 0;
   list-style: none;
+}
+
+html[data-language]:not([data-language="zh"]) .hero__platforms [data-zh-only] {
+  display: none;
 }
 
 .hero__platforms li {

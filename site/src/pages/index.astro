@@ -45,10 +45,12 @@ const messages = {
                 "Socai, instead, deeply reconstructs the structures of popular social platforms so that your agent can directly operate them in your browser.",
             platformsAria: "supported platforms",
             platformXiaohongshu: "Xiaohongshu",
-            platformTiktok: "TikTok / Douyin",
+            platformTiktok: "TikTok",
             platformInstagram: "Instagram",
             platformLinkedin: "LinkedIn",
             platformX: "X",
+            platformWeixin: "WeChat",
+            platformPodcast: "Podcast",
             actionsAria: "web demo and sales",
             resourcesAria: "desktop downloads",
             demo: "try now",
@@ -106,6 +108,8 @@ const messages = {
             platformInstagram: "Instagram",
             platformLinkedin: "LinkedIn",
             platformX: "X",
+            platformWeixin: "公众号",
+            platformPodcast: "播客",
             actionsAria: "Web Demo 和预约演示",
             resourcesAria: "桌面端下载",
             demo: "立即体验",
@@ -160,10 +164,12 @@ const messages = {
                 "Socai は主要プラットフォームの構造を再現し、Agent がブラウザ上で直接操作できるようにします。",
             platformsAria: "対応プラットフォーム",
             platformXiaohongshu: "Xiaohongshu",
-            platformTiktok: "TikTok / Douyin",
+            platformTiktok: "TikTok",
             platformInstagram: "Instagram",
             platformLinkedin: "LinkedIn",
             platformX: "X",
+            platformWeixin: "WeChat",
+            platformPodcast: "ポッドキャスト",
             actionsAria: "Web 版とデモ予約",
             resourcesAria: "デスクトップ版のダウンロード",
             demo: "今すぐ試す",
@@ -218,10 +224,12 @@ const messages = {
                 "Socai는 주요 소셜 플랫폼의 구조를 재구성하여 Agent가 브라우저에서 직접 작업할 수 있게 합니다.",
             platformsAria: "지원 플랫폼",
             platformXiaohongshu: "Xiaohongshu",
-            platformTiktok: "TikTok / Douyin",
+            platformTiktok: "TikTok",
             platformInstagram: "Instagram",
             platformLinkedin: "LinkedIn",
             platformX: "X",
+            platformWeixin: "WeChat",
+            platformPodcast: "팟캐스트",
             actionsAria: "웹 체험 및 데모 예약",
             resourcesAria: "데스크톱 다운로드",
             demo: "지금 체험",
@@ -276,10 +284,12 @@ const messages = {
                 "Socai reconstruye la estructura de las principales plataformas para que tu Agent pueda operar directamente en tu navegador.",
             platformsAria: "plataformas compatibles",
             platformXiaohongshu: "Xiaohongshu",
-            platformTiktok: "TikTok / Douyin",
+            platformTiktok: "TikTok",
             platformInstagram: "Instagram",
             platformLinkedin: "LinkedIn",
             platformX: "X",
+            platformWeixin: "WeChat",
+            platformPodcast: "Pódcast",
             actionsAria: "prueba web y reserva de demo",
             resourcesAria: "descargas de escritorio",
             demo: "probar ahora",
@@ -334,10 +344,12 @@ const messages = {
                 "Socai reconstruit la structure des principales plateformes afin que votre Agent puisse les utiliser directement dans votre navigateur.",
             platformsAria: "plateformes prises en charge",
             platformXiaohongshu: "Xiaohongshu",
-            platformTiktok: "TikTok / Douyin",
+            platformTiktok: "TikTok",
             platformInstagram: "Instagram",
             platformLinkedin: "LinkedIn",
             platformX: "X",
+            platformWeixin: "WeChat",
+            platformPodcast: "Podcast",
             actionsAria: "essai web et réservation de démo",
             resourcesAria: "téléchargements pour ordinateur",
             demo: "essayer maintenant",
@@ -392,10 +404,12 @@ const messages = {
                 "Socai rekonstruiert die Strukturen wichtiger Plattformen, damit dein Agent sie direkt im Browser bedienen kann.",
             platformsAria: "unterstützte Plattformen",
             platformXiaohongshu: "Xiaohongshu",
-            platformTiktok: "TikTok / Douyin",
+            platformTiktok: "TikTok",
             platformInstagram: "Instagram",
             platformLinkedin: "LinkedIn",
             platformX: "X",
+            platformWeixin: "WeChat",
+            platformPodcast: "Podcast",
             actionsAria: "Web-Test und Demo-Termin",
             resourcesAria: "Desktop-Downloads",
             demo: "jetzt testen",
@@ -450,10 +464,12 @@ const messages = {
                 "O Socai reconstrói a estrutura das principais plataformas para que seu Agent possa operá-las diretamente no navegador.",
             platformsAria: "plataformas compatíveis",
             platformXiaohongshu: "Xiaohongshu",
-            platformTiktok: "TikTok / Douyin",
+            platformTiktok: "TikTok",
             platformInstagram: "Instagram",
             platformLinkedin: "LinkedIn",
             platformX: "X",
+            platformWeixin: "WeChat",
+            platformPodcast: "Podcast",
             actionsAria: "teste web e agendamento de demonstração",
             resourcesAria: "downloads para desktop",
             demo: "testar agora",
@@ -577,7 +593,7 @@ const socialImageAlt = message("meta.socialImageAlt");
                         aria-label={message("hero.platformsAria")}
                         data-i18n-aria-label="hero.platformsAria"
                     >
-                        <li>
+                        <li data-zh-only>
                             <img
                                 src="/platforms/xiaohongshu.png"
                                 width="24"
@@ -630,6 +646,28 @@ const socialImageAlt = message("meta.socialImageAlt");
                             />
                             <span data-i18n="hero.platformX"
                                 >{message("hero.platformX")}</span
+                            >
+                        </li>
+                        <li data-zh-only>
+                            <img
+                                src="/platforms/weixin.png"
+                                width="24"
+                                height="24"
+                                alt=""
+                            />
+                            <span data-i18n="hero.platformWeixin"
+                                >{message("hero.platformWeixin")}</span
+                            >
+                        </li>
+                        <li>
+                            <img
+                                src="/platforms/podcast.png"
+                                width="24"
+                                height="24"
+                                alt=""
+                            />
+                            <span data-i18n="hero.platformPodcast"
+                                >{message("hero.platformPodcast")}</span
                             >
                         </li>
                     </ul>

@@ -20,6 +20,10 @@
   <img src="site/public/platforms/linkedin.svg" height="32" alt="LinkedIn">
   &nbsp;&nbsp;
   <img src="site/public/platforms/x.png" height="32" alt="X">
+  &nbsp;&nbsp;
+  <img src="site/public/platforms/weixin.png" height="32" alt="WeChat">
+  &nbsp;&nbsp;
+  <img src="site/public/platforms/podcast.png" height="32" alt="Podcast">
 </p>
 
 [![website](https://img.shields.io/badge/website-socai.io-555?style=flat-square&color=blue)](https://socai.io/?utm_source=github&utm_medium=readme)
@@ -97,7 +101,7 @@ socai linkedin get-posts --post https://www.linkedin.com/posts/<id> --num-commen
 socai linkedin comment https://www.linkedin.com/posts/<id> --text 'Exact comment text'
 ```
 
-**WeChat Official Accounts** — search articles and read full article text.
+**WeChat Media Platform** — search articles and read full article text.
 
 ```bash
 socai weixin search "personal agent" --num 10

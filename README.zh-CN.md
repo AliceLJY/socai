@@ -19,6 +19,10 @@
   <img src="site/public/platforms/linkedin.svg" height="32" alt="LinkedIn">
   &nbsp;&nbsp;
   <img src="site/public/platforms/x.png" height="32" alt="X">
+  &nbsp;&nbsp;
+  <img src="site/public/platforms/weixin.png" height="32" alt="微信">
+  &nbsp;&nbsp;
+  <img src="site/public/platforms/podcast.png" height="32" alt="播客">
 </p>
 
 [![website](https://img.shields.io/badge/website-socai.io-555?style=flat-square&color=blue)](https://socai.io/?utm_source=github&utm_medium=readme)
