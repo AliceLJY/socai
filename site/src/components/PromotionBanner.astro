@@ -1,0 +1,16 @@
+---
+import { MANUS_INVITE_ICON, MANUS_CLOSE_ICON } from '../lib/campaign-icons';
+import '../styles/campaign-banner.css';
+---
+<aside class="campaign-banner" data-campaign-banner hidden aria-label="socai">
+  <a data-campaign-link class="campaign-banner__link" href="https://agent.socai.io/session">
+    <span class="campaign-banner__gift" aria-hidden="true" set:html={MANUS_INVITE_ICON} />
+    <span class="campaign-banner__copy"><span data-campaign-title></span><strong data-campaign-offer></strong></span>
+    <span class="campaign-banner__countdown" data-campaign-countdown aria-live="off"></span>
+  </a>
+  <button type="button" class="campaign-banner__close" data-campaign-close aria-label="Dismiss announcement" set:html={MANUS_CLOSE_ICON} />
+</aside>
+<script>
+  import { mountCampaignBanner } from '../lib/signup-campaign';
+  mountCampaignBanner();
+</script>
