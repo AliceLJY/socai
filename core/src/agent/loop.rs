@@ -1687,10 +1687,20 @@ fn requested_artifact_kinds(task: &str) -> Vec<&'static str> {
             for kind in target_kinds {
                 kinds.push(kind);
             }
+            // A generic file noun must belong to the creation clause. In a
+            // browser/API question, a later instruction to read documentation
+            // is a source, not a request to export a document.
+            let generic_target = target
+                .split([',', ';', '.', '\n', '，', '；', '。', '、'])
+                .next()
+                .unwrap_or("")
+                .split(" and ")
+                .next()
+                .unwrap_or("");
             if !has_typed_artifact
                 && ["file", "document", "文件", "文档"]
                     .iter()
-                    .any(|marker| target.contains(marker))
+                    .any(|marker| generic_target.contains(marker))
                 && !kinds.contains(&"generic")
             {
                 kinds.push("generic");
@@ -2148,6 +2158,21 @@ mod tests {
 
     #[test]
     fn execution_limit_preserves_partial_result_without_requested_deliverable() {
+        for task in [
+            "核对 Kernel 官方文档中浏览器创建、截图和回放三项能力的接入方式，给出对应 API 路径、注意事项和官方来源链接。请实际打开官方文档核对，不要仅凭记忆回答。",
+            "Create a browser, then inspect the official documentation.",
+            "Create a browser and read the documentation.",
+        ] {
+            assert!(requested_artifact_kinds(task).is_empty(), "{task}");
+        }
+        assert_eq!(
+            requested_artifact_kinds("Create a document from these findings"),
+            vec!["generic"]
+        );
+        assert_eq!(
+            requested_artifact_kinds("请将结果整理成文件"),
+            vec!["generic"]
+        );
         let response = summary_response("目前只完成了数据整理。");
         let state = RunState::new("请根据搜索结果生成 PDF 报告");
 
