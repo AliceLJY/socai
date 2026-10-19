@@ -676,6 +676,14 @@ does not grant publishing permission. Independent platform tool scopes may run
 concurrently, while calls within one scope and external writes remain ordered.
 Browserless site adapters keep their browser-free execution path.
 
+Hosted operators can set `SOCAI_READ_TOOL_IDLE_SECONDS` (1–300) and
+`SOCAI_READ_TOOL_WALL_SECONDS` (1–3600, default 900) to bound selected read-only
+research calls. Only real tool progress renews the idle deadline; the wall-clock
+deadline never renews. On timeout the agent stops bulk retries and produces an
+explicitly partial answer from saved evidence instead of losing the whole run
+to the host's outer inactivity timeout. This watchdog does not cancel external
+writes or shell commands and is disabled unless the idle setting is supplied.
+
 For OpenRouter only, `SOCAI_OPENROUTER_FALLBACK_MODELS` accepts a bounded,
 comma-separated fallback list. Usage records retain the model actually served
 so hosts can attribute fallback costs correctly. With the setting absent, the

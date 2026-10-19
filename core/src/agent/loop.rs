@@ -216,12 +216,19 @@ async fn execute_parallel_tool_call(
         );
         tokio::pin!(dispatch);
         let mut progress_open = true;
+        let mut watchdog = ReadToolWatchdog::new(tools, &pending.name);
         loop {
             tokio::select! {
                 outcome = &mut dispatch => break outcome,
+                _ = tokio::time::sleep_until(watchdog.deadline()), if watchdog.enabled => {
+                    pending.tool_ctx.record_tool_outcome(&pending.name, &pending.effective_input, false);
+                    break watchdog.failure(&pending.name);
+                }
                 progress = pending.progress_rx.recv(), if progress_open => {
                     match progress {
-                        Some(progress) => emit(
+                        Some(progress) => {
+                            watchdog.progress();
+                            emit(
                             events,
                             AgentEvent::ToolProgress {
                                 id: pending.id.clone(),
@@ -230,7 +237,8 @@ async fn execute_parallel_tool_call(
                                 name: pending.name.clone(),
                                 progress,
                             },
-                        ),
+                            );
+                        },
                         None => progress_open = false,
                     }
                 }
@@ -600,6 +608,12 @@ pub async fn run_agent_with_events(
                     ..
                 } = pending;
                 let duration_s = (duration_ms as f64) / 1000.0;
+                if error
+                    .as_deref()
+                    .is_some_and(|message| message.starts_with(READ_TOOL_DEADLINE_ERROR))
+                {
+                    degraded_reason = error.clone();
+                }
                 recorder.finish_blocks(&result.blocks, duration_ms, error.as_deref())?;
                 let result_content = tool_result_to_content(&result);
                 let content = content_for_log(&result_content);
@@ -692,12 +706,19 @@ pub async fn run_agent_with_events(
                         let dispatch = dispatch_tool(&tools, name, &effective_input, &tool_ctx);
                         tokio::pin!(dispatch);
                         let mut progress_open = true;
+                        let mut watchdog = ReadToolWatchdog::new(&tools, name);
                         let outcome = loop {
                             tokio::select! {
                                 outcome = &mut dispatch => break outcome,
+                                _ = tokio::time::sleep_until(watchdog.deadline()), if watchdog.enabled => {
+                                    tool_ctx.record_tool_outcome(name, &effective_input, false);
+                                    break watchdog.failure(name);
+                                }
                                 progress = progress_rx.recv(), if progress_open => {
                                     match progress {
-                                        Some(progress) => emit(
+                                        Some(progress) => {
+                                            watchdog.progress();
+                                            emit(
                                             &events,
                                             AgentEvent::ToolProgress {
                                                 id: id.clone(),
@@ -706,12 +727,21 @@ pub async fn run_agent_with_events(
                                                 name: name.clone(),
                                                 progress,
                                             },
-                                        ),
+                                            );
+                                        },
                                         None => progress_open = false,
                                     }
                                 }
                             }
                         };
+                        if outcome
+                            .1
+                            .as_deref()
+                            .is_some_and(|message| message.starts_with(READ_TOOL_DEADLINE_ERROR))
+                        {
+                            degraded_reason = outcome.1.clone();
+                            break outcome;
+                        }
                         let recovery = match &options.tool_failure_recovery {
                             Some(recovery) => recovery.recover_after_tool(name, retry_number).await,
                             None => ToolRecoveryOutcome::NotNeeded,
@@ -1215,6 +1245,69 @@ fn tool_calls_have_distinct_parallel_scopes(tools: &[SharedTool], calls: &[ToolC
 
 fn emit(events: &broadcast::Sender<AgentEvent>, event: AgentEvent) {
     let _ = events.send(event);
+}
+
+/// Hosted read-only research must return control to the model before the
+/// backend's outer inactivity watchdog kills the entire run. Only genuine
+/// tool progress renews the idle deadline; a separate wall limit still bounds
+/// pathological tools that keep emitting progress forever. Opt-in keeps CLI
+/// and Desktop behavior unchanged. Never cancel external writes this way.
+const READ_TOOL_DEADLINE_ERROR: &str = "[socai:read-deadline]";
+
+struct ReadToolWatchdog {
+    enabled: bool,
+    idle: Duration,
+    idle_until: tokio::time::Instant,
+    hard_until: tokio::time::Instant,
+}
+
+impl ReadToolWatchdog {
+    fn new(tools: &[SharedTool], name: &str) -> Self {
+        let idle_seconds = std::env::var("SOCAI_READ_TOOL_IDLE_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| (1..=300).contains(value));
+        let wall_seconds = std::env::var("SOCAI_READ_TOOL_WALL_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| (1..=3600).contains(value))
+            .unwrap_or(900);
+        let read_name = name.rsplit("__").next().unwrap_or(name);
+        let read_only = matches!(
+            read_name,
+            "search" | "get_notes" | "author_scan" | "web_read" | "web_navigate"
+        ) && find_tool(tools, name).is_some_and(|tool| !tool.external_write());
+        let now = tokio::time::Instant::now();
+        let idle = Duration::from_secs(idle_seconds.unwrap_or(90));
+        Self {
+            enabled: read_only && idle_seconds.is_some(),
+            idle,
+            idle_until: now + idle,
+            hard_until: now + Duration::from_secs(wall_seconds),
+        }
+    }
+
+    fn progress(&mut self) {
+        self.idle_until = tokio::time::Instant::now() + self.idle;
+    }
+
+    fn deadline(&self) -> tokio::time::Instant {
+        self.idle_until.min(self.hard_until)
+    }
+
+    fn failure(&self, name: &str) -> (ToolResult, Option<String>) {
+        let message = format!(
+            "{READ_TOOL_DEADLINE_ERROR} Read-only tool {name} exceeded its progress or wall-clock deadline. \
+            Do not repeat the same bulk request. Review any saved evidence and files, \
+            then provide an explicitly partial answer with sources. If nothing was \
+            saved, explain that limitation instead of claiming the research completed."
+        );
+        warn!(
+            tool = name,
+            "read-only research tool timed out; returning control to the model"
+        );
+        (ToolResult::failure(message.clone()), Some(message))
+    }
 }
 
 async fn dispatch_tool(
@@ -2128,5 +2221,24 @@ mod tests {
         )
         .await;
         assert!(spoof_ctx.verified_recovery().is_none());
+
+        // A deadline is a trusted failure, not a successful tool merely
+        // containing the word Error. Progress renews idle, never wall time.
+        let now = tokio::time::Instant::now();
+        let mut watchdog = ReadToolWatchdog {
+            enabled: true,
+            idle: Duration::from_millis(10),
+            idle_until: now,
+            hard_until: now + Duration::from_millis(30),
+        };
+        watchdog.progress();
+        assert!(watchdog.deadline() > now);
+        assert!(watchdog.deadline() <= watchdog.hard_until);
+        tokio::time::sleep_until(watchdog.deadline()).await;
+        let (result, error) = watchdog.failure("search");
+        assert!(result.failed());
+        assert!(error.unwrap().starts_with(READ_TOOL_DEADLINE_ERROR));
+        assert!(result.flat_text().contains("explicitly partial"));
+        assert!(!ReadToolWatchdog::new(&tools, "shell").enabled);
     }
 }
