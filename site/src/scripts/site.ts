@@ -210,6 +210,47 @@ document.querySelectorAll("[data-copy]").forEach((button) => {
     });
 });
 
+const bookForm = document.querySelector("[data-book-form]");
+if (bookForm instanceof HTMLFormElement) {
+    const apiBase = (bookForm.dataset.apiBase || "/api/server").replace(/\/$/, "");
+    const status = bookForm.querySelector("[data-book-status]");
+    bookForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const language = document.documentElement.dataset.language || "en";
+        const data = new FormData(bookForm);
+        const button = bookForm.querySelector("button[type='submit']");
+        if (button instanceof HTMLButtonElement) button.disabled = true;
+        if (status instanceof HTMLElement) status.hidden = true;
+        try {
+            const response = await fetch(`${apiBase}/v1/web/demo-requests`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    name: String(data.get("name") || ""),
+                    email: String(data.get("email") || ""),
+                    company: String(data.get("company") || ""),
+                    use_case: String(data.get("use_case") || ""),
+                    website: String(data.get("website") || ""),
+                    source: "website-book-demo",
+                }),
+            });
+            if (!response.ok) throw new Error("request failed");
+            if (status instanceof HTMLElement) {
+                status.textContent = getMessage(language, "contact.formSuccess");
+                status.hidden = false;
+            }
+            bookForm.reset();
+        } catch {
+            if (status instanceof HTMLElement) {
+                status.textContent = getMessage(language, "contact.formFailure");
+                status.hidden = false;
+            }
+        } finally {
+            if (button instanceof HTMLButtonElement) button.disabled = false;
+        }
+    });
+}
+
 const preferredLanguage = chooseInitialLanguage();
 persistLanguage(preferredLanguage);
 applyLanguage(resolvePageLanguage(preferredLanguage, supportedLanguages));

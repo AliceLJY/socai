@@ -20,18 +20,25 @@ test("homepage promotes the canonical Agent Web experience before desktop downlo
   ]);
 
   assert.match(page, /const webDemoUrl = "https:\/\/agent\.socai\.io"/u);
-  assert.match(page, /const bookDemoUrl = "https:\/\/agent\.socai\.io\/book-demo"/u);
-  assert.match(page, /demo: "try now"/u);
-  assert.match(page, /demo: "立即体验"/u);
+  assert.doesNotMatch(page, /bookDemoUrl|book-demo/u);
+  assert.match(page, /demo: "try the web app"/u);
+  assert.match(page, /demo: "体验网页版"/u);
+  assert.match(page, /desktop: "download the desktop app"/u);
+  assert.match(page, /desktop: "下载桌面 App"/u);
+  assert.match(page, /agentInstall: "install the Skill \/ CLI for your agent"/u);
+  assert.match(page, /agentInstall: "给 Agent 安装 Skill \/ CLI"/u);
+  const webEntry = page.indexOf('class="hero__entry hero__entry--primary"');
+  const desktopEntry = page.indexOf('class="hero__entry-downloads"');
+  const agentEntry = page.indexOf('class="hero__entry hero__entry--install"');
   assert.ok(
-    page.indexOf('class="hero__actions"') < page.indexOf('class="hero__resources"'),
-    "Primary Web actions must appear before secondary download links",
+    webEntry >= 0 && webEntry < desktopEntry && desktopEntry < agentEntry,
+    "Web, desktop, and agent install entries must stack in that order",
   );
   assert.doesNotMatch(page, /data-i18n="hero\.github"/u);
   assert.match(page, /data-platform-icon="macos"/u);
   assert.match(page, /data-platform-icon="windows"/u);
   assert.doesNotMatch(page, /<span>macOS<\/span>|<span>Windows<\/span>/u);
-  assert.match(styles, /\.hero__actions \.button[\s\S]*?min-width:\s*180px/u);
+  assert.match(styles, /\.hero__entries[\s\S]*?flex-direction:\s*column/u);
 
   for (const language of ["zh", "en", "ja", "ko", "es", "fr", "de", "pt"]) {
     assert.match(page, new RegExp(`^    ${language}: \\{`, "mu"));
@@ -66,4 +73,24 @@ test("language preference survives fallback pages and keeps outbound URLs aligne
   assert.equal(switched.hash, "#hero");
   assert.equal(withLanguage("https://agent.socai.io", "de").toString(), "https://agent.socai.io/?lang=de");
   assert.equal(withLanguage("https://agent.socai.io/book-demo", "de").toString(), "https://agent.socai.io/book-demo?lang=de");
+});
+
+test("contact page lists discord, wechat, github, then the demo form", async () => {
+  const [page, vercel] = await Promise.all([
+    read("src/pages/contact.astro"),
+    read("vercel.json"),
+  ]);
+  const discord = page.indexOf('href={discordUrl}');
+  const qr = page.indexOf('class="qr-card"');
+  const github = page.indexOf('href={githubIssuesUrl}');
+  const form = page.indexOf('data-book-form');
+  assert.ok(discord >= 0 && discord < qr && qr < github && github < form);
+  assert.match(page, /fill="#5865F2"/u);
+  assert.match(page, /data-api-base="\/api\/server"/u);
+  assert.match(page, /class="qr-card" data-zh-only/u);
+  assert.match(page, /formTitle: "预约演示，或其他任何问题"/u);
+  assert.match(page, /formEmail: "邮箱"/u);
+  assert.doesNotMatch(page, /formPrivacy|这些信息仅用于回复本次演示预约/u);
+  assert.match(page, /name="use_case"/u);
+  assert.match(vercel, /"destination": "https:\/\/agent-api\.socai\.io\/:path\*"/u);
 });

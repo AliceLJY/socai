@@ -20,8 +20,8 @@ const messages = {
         meta: {
             title: "socai · contact",
             description:
-                "join the socai discord or wechat group. discord is the public community; wechat is the chinese group.",
-            socialImageAlt: "socai contact — discord and wechat group",
+                "Join the socai Discord, scan the WeChat group QR, open a GitHub issue, or request a demo.",
+            socialImageAlt: "socai contact — discord, wechat, github, and demo form",
         },
         nav: {
             primaryAria: "primary navigation",
@@ -35,12 +35,27 @@ const messages = {
         },
         contact: {
             eyebrow: "contact",
-            qrAlt: "socai wechat group qr code",
-            altHead: "other ways",
             discordLabel: "Discord",
             discordDesc: "the public community for chat, feedback, and ideas",
+            wechatLabel: "WeChat group",
+            qrAlt: "socai wechat group qr code",
             githubLabel: "GitHub Issues",
             githubDesc: "report a bug or request a feature",
+            formTitle: "Book a demo, or ask about anything else",
+            formSubtitle:
+                "Tell us the platforms, evidence, and recurring questions your team works with. We will focus the demo on that workflow.",
+            formName: "Name",
+            formNamePlaceholder: "Your name",
+            formEmail: "Email",
+            formEmailPlaceholder: "you@email.com",
+            formCompany: "Company",
+            formCompanyPlaceholder: "Company or team",
+            formUseCase: "What would you like to research?",
+            formUseCasePlaceholder:
+                "Platforms, typical questions, expected sources, team size, and any access constraints.",
+            formSubmit: "Request a demo",
+            formSuccess: "Request received. We will follow up by email.",
+            formFailure: "The request failed. Please try again.",
         },
         footer: {
             linksAria: "footer links",
@@ -53,8 +68,8 @@ const messages = {
         meta: {
             title: "socai · 联系我们",
             description:
-                "加入 socai Discord 或微信群。Discord 是公开社区，微信群面向中文讨论。",
-            socialImageAlt: "socai 联系我们 — Discord 与微信群",
+                "加入 socai Discord 或微信群，提交 GitHub issue，或填写预约演示。",
+            socialImageAlt: "socai 联系我们 — Discord、微信群、GitHub 与预约表单",
         },
         nav: {
             primaryAria: "主导航",
@@ -68,12 +83,27 @@ const messages = {
         },
         contact: {
             eyebrow: "联系我们",
-            qrAlt: "socai 社交媒体调研微信群二维码",
-            altHead: "其他方式",
             discordLabel: "Discord",
             discordDesc: "公开社区，讨论使用问题和功能想法",
+            wechatLabel: "微信群",
+            qrAlt: "socai 社交媒体调研微信群二维码",
             githubLabel: "GitHub Issues",
             githubDesc: "提交 bug 或功能请求",
+            formTitle: "预约演示，或其他任何问题",
+            formSubtitle:
+                "告诉我们团队关注的平台、证据和重复性问题，我们会围绕这条工作流准备演示。",
+            formName: "姓名",
+            formNamePlaceholder: "你的姓名",
+            formEmail: "邮箱",
+            formEmailPlaceholder: "you@email.com",
+            formCompany: "公司",
+            formCompanyPlaceholder: "公司或团队",
+            formUseCase: "你希望调研什么？",
+            formUseCasePlaceholder:
+                "请说明平台、常见问题、期望证据、团队规模和访问限制。",
+            formSubmit: "提交预约",
+            formSuccess: "预约已收到，我们会通过邮箱联系你。",
+            formFailure: "提交失败，请稍后重试。",
         },
         footer: {
             linksAria: "页脚链接",
@@ -170,11 +200,41 @@ const socialImageAlt = message("meta.socialImageAlt");
                     aria-label={message("contact.eyebrow")}
                     data-i18n-aria-label="contact.eyebrow"
                 >
-                    <span class="contact__eyebrow" data-i18n="contact.eyebrow"
-                        >{message("contact.eyebrow")}</span
+                    <h1 class="contact__eyebrow" data-i18n="contact.eyebrow"
+                        >{message("contact.eyebrow")}</h1
                     >
 
-                    <div class="qr-card">
+                    <a class="contact-channel" href={discordUrl}>
+                        <span class="contact-channel__icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="#5865F2">
+                                <path
+                                    d="M19.27 5.33C17.94 4.71 16.5 4.26 15 4a.1.1 0 0 0-.1.05c-.18.33-.39.76-.53 1.09a16.1 16.1 0 0 0-4.74 0c-.14-.34-.35-.76-.54-1.09c-.05-.07-.1-.05-.14-.05c-1.5.26-2.93.71-4.27 1.33c-.05 0-.09.03-.1.08C2.2 9.05 1.5 12.57 1.82 16.05c0 .05.03.09.07.11c1.8 1.32 3.53 2.12 5.24 2.65c.05.01.1 0 .13-.05c.4-.55.76-1.13 1.07-1.74c.02-.04 0-.08-.04-.09c-.57-.22-1.11-.48-1.64-.78c-.04-.02-.04-.08-.01-.11c.11-.08.22-.17.33-.25c.02-.02.05-.02.07-.01c3.44 1.57 7.15 1.57 10.55 0c.02-.01.05-.01.07.01c.11.09.22.17.33.26c.04.03.04.09-.01.11c-.52.31-1.07.56-1.64.78c-.04.01-.05.06-.04.09c.32.61.68 1.19 1.07 1.74c.03.04.08.05.13.05c1.72-.53 3.45-1.33 5.25-2.65c.04-.02.06-.06.07-.11c.41-4.18-.68-7.67-2.86-10.64a.1.1 0 0 0-.1-.08ZM8.52 14.1c-.99 0-1.8-.9-1.8-2.02s.8-2.02 1.8-2.02s1.81.91 1.8 2.02c.01 1.11-.8 2.02-1.8 2.02Zm6.97 0c-.99 0-1.8-.9-1.8-2.02s.8-2.02 1.8-2.02s1.81.91 1.8 2.02c0 1.11-.81 2.02-1.8 2.02Z"
+                                ></path>
+                            </svg>
+                        </span>
+                        <span>
+                            <span
+                                class="contact-channel__label"
+                                data-i18n="contact.discordLabel"
+                                >{message("contact.discordLabel")}</span
+                            >
+                            <span
+                                class="contact-channel__desc"
+                                data-i18n="contact.discordDesc"
+                                >{message("contact.discordDesc")}</span
+                            >
+                        </span>
+                        <span class="contact-channel__value"
+                            >discord.gg/CpQdA7bwt8 ↗</span
+                        >
+                    </a>
+
+                    <div class="qr-card" data-zh-only>
+                        <span
+                            class="qr-card__label"
+                            data-i18n="contact.wechatLabel"
+                            >{message("contact.wechatLabel")}</span
+                        >
                         <img
                             src={qrImage}
                             alt={message("contact.qrAlt")}
@@ -184,49 +244,135 @@ const socialImageAlt = message("meta.socialImageAlt");
                         />
                     </div>
 
-                    <div class="contact-alt">
-                        <span
-                            class="contact-alt__head"
-                            data-i18n="contact.altHead"
-                            >{message("contact.altHead")}</span
+                    <a class="contact-channel" href={githubIssuesUrl}>
+                        <span class="contact-channel__icon" aria-hidden="true">
+                            <svg viewBox="0 0 16 16" fill="currentColor">
+                                <path
+                                    d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8"
+                                ></path>
+                            </svg>
+                        </span>
+                        <span>
+                            <span
+                                class="contact-channel__label"
+                                data-i18n="contact.githubLabel"
+                                >{message("contact.githubLabel")}</span
+                            >
+                            <span
+                                class="contact-channel__desc"
+                                data-i18n="contact.githubDesc"
+                                >{message("contact.githubDesc")}</span
+                            >
+                        </span>
+                        <span class="contact-channel__value"
+                            >github.com/socai-io/socai ↗</span
                         >
-                        <div class="contact-alt__list">
-                            <a class="contact-alt__row" href={discordUrl}>
-                                <span>
-                                    <span
-                                        class="contact-alt__label"
-                                        data-i18n="contact.discordLabel"
-                                        >{message("contact.discordLabel")}</span
-                                    >
-                                    <span
-                                        class="contact-alt__desc"
-                                        data-i18n="contact.discordDesc"
-                                        >{message("contact.discordDesc")}</span
-                                    >
-                                </span>
-                                <span class="contact-alt__value"
-                                    >discord.gg/CpQdA7bwt8 ↗</span
-                                >
-                            </a>
-                            <a class="contact-alt__row" href={githubIssuesUrl}>
-                                <span>
-                                    <span
-                                        class="contact-alt__label"
-                                        data-i18n="contact.githubLabel"
-                                        >{message("contact.githubLabel")}</span
-                                    >
-                                    <span
-                                        class="contact-alt__desc"
-                                        data-i18n="contact.githubDesc"
-                                        >{message("contact.githubDesc")}</span
-                                    >
-                                </span>
-                                <span class="contact-alt__value"
-                                    >github.com/socai-io/socai ↗</span
-                                >
-                            </a>
+                    </a>
+
+                    <form
+                        class="contact-form"
+                        data-book-form
+                        data-api-base="/api/server"
+                    >
+                        <h2 data-i18n="contact.formTitle"
+                            >{message("contact.formTitle")}</h2
+                        >
+                        <p
+                            class="contact-form__lead"
+                            data-i18n="contact.formSubtitle"
+                        >
+                            {message("contact.formSubtitle")}
+                        </p>
+                        <div class="form-field">
+                            <label for="book-name" data-i18n="contact.formName"
+                                >{message("contact.formName")}</label
+                            >
+                            <input
+                                id="book-name"
+                                name="name"
+                                minlength="2"
+                                maxlength="120"
+                                required
+                                autocomplete="name"
+                                placeholder={message("contact.formNamePlaceholder")}
+                                data-i18n-placeholder="contact.formNamePlaceholder"
+                            />
                         </div>
-                    </div>
+                        <div class="form-field">
+                            <label for="book-email" data-i18n="contact.formEmail"
+                                >{message("contact.formEmail")}</label
+                            >
+                            <input
+                                id="book-email"
+                                name="email"
+                                type="email"
+                                required
+                                autocomplete="email"
+                                placeholder={message(
+                                    "contact.formEmailPlaceholder",
+                                )}
+                                data-i18n-placeholder="contact.formEmailPlaceholder"
+                            />
+                        </div>
+                        <div class="form-field">
+                            <label
+                                for="book-company"
+                                data-i18n="contact.formCompany"
+                                >{message("contact.formCompany")}</label
+                            >
+                            <input
+                                id="book-company"
+                                name="company"
+                                maxlength="160"
+                                autocomplete="organization"
+                                placeholder={message(
+                                    "contact.formCompanyPlaceholder",
+                                )}
+                                data-i18n-placeholder="contact.formCompanyPlaceholder"
+                            />
+                        </div>
+                        <div class="form-field">
+                            <label
+                                for="book-use-case"
+                                data-i18n="contact.formUseCase"
+                                >{message("contact.formUseCase")}</label
+                            >
+                            <textarea
+                                id="book-use-case"
+                                name="use_case"
+                                rows="6"
+                                minlength="20"
+                                maxlength="4000"
+                                required
+                                placeholder={message(
+                                    "contact.formUseCasePlaceholder",
+                                )}
+                                data-i18n-placeholder="contact.formUseCasePlaceholder"
+                            ></textarea>
+                        </div>
+                        <div class="honeypot" aria-hidden="true">
+                            <label for="book-website">Website</label>
+                            <input
+                                id="book-website"
+                                name="website"
+                                tabindex="-1"
+                                autocomplete="off"
+                            />
+                        </div>
+                        <button
+                            class="button button--primary"
+                            type="submit"
+                            data-i18n="contact.formSubmit"
+                            >{message("contact.formSubmit")}</button
+                        >
+                        <p
+                            class="form-alert"
+                            data-book-status
+                            role="status"
+                            hidden
+                        >
+                        </p>
+                    </form>
                 </section>
             </main>
 

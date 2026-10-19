@@ -4,6 +4,17 @@ import starlight from '@astrojs/starlight';
 export default defineConfig({
   site: 'https://socai.io',
   output: 'static',
+  vite: {
+    server: {
+      proxy: {
+        '/api/server': {
+          target: 'https://agent-api.socai.io',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/server/, ''),
+        },
+      },
+    },
+  },
   integrations: [
     starlight({
       title: 'socai docs',

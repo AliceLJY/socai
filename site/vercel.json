@@ -10,6 +10,10 @@
   },
   "rewrites": [
     {
+      "source": "/api/server/:path*",
+      "destination": "https://agent-api.socai.io/:path*"
+    },
+    {
       "source": "/v1/events",
       "destination": "/api/telemetry"
     },

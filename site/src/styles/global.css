@@ -248,7 +248,7 @@ html[data-language="zh"] .hero h1 {
   list-style: none;
 }
 
-html[data-language]:not([data-language="zh"]) .hero__platforms [data-zh-only] {
+html[data-language]:not([data-language="zh"]) [data-zh-only] {
   display: none;
 }
 
@@ -291,80 +291,86 @@ html[data-language]:not([data-language="zh"]) .hero__platforms [data-zh-only] {
   text-wrap: balance;
 }
 
-.hero__actions {
+.hero__entries {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(100%, 640px);
+  margin: 0 auto;
+  text-align: left;
+}
+
+.hero__entry {
   display: inline-flex;
-  align-items: stretch;
+  align-items: center;
   justify-content: center;
   gap: 10px;
 }
 
-.hero__actions .button,
-.hero__resources .hero__download {
-  height: 44px;
-}
-
-.hero__actions .button {
-  min-width: 180px;
-}
-
-.hero__actions .button--primary {
+.hero__entry--primary {
   gap: 8px;
+  height: 44px;
   padding: 0 18px;
+  border: 1px solid var(--ink-0);
+  border-radius: 8px;
+  background: var(--ink-0);
+  color: var(--ink-9);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.hero__entry--primary:hover {
+  background: var(--ink-1);
+}
+
+.hero__entry--primary .button__external {
+  color: inherit;
   font-size: 14px;
 }
 
-.hero__actions .button--secondary {
-  gap: 8px;
-  padding: 0 16px;
-  font-size: 13px;
+.hero__entry-label {
+  color: var(--ink-0);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
 }
 
-.hero__actions .button__glyph,
-.hero__actions .button__external {
-  font-size: 12px;
-}
-
-.hero__resources {
+.hero__entry-downloads {
   display: flex;
-  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hero__entry--install {
+  align-self: stretch;
   align-items: stretch;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 12px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 14px 12px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
 }
 
 .hero__download {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 48px;
-  min-width: 48px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--fg-muted);
+  border: 1px solid var(--ink-0);
+  border-radius: 8px;
+  background: var(--ink-0);
+  color: var(--ink-9);
   font-size: 13px;
   font-weight: 500;
 }
 
 .hero__download:hover {
-  border-color: var(--line-strong);
-  background: var(--surface);
-  color: var(--ink-0);
-}
-
-.hero__install {
-  width: min(100%, 640px);
-  margin: 28px auto 0;
-}
-
-.hero__install-lead {
-  margin: 0 0 12px;
-  color: var(--ink-0);
-  font-size: 16px;
-  font-weight: 500;
-  letter-spacing: -0.015em;
+  background: var(--ink-1);
+  color: var(--ink-9);
 }
 
 .hero__install-row {
@@ -887,15 +893,8 @@ html[data-language]:not([data-language="zh"]) .hero__platforms [data-zh-only] {
     padding-top: 56px;
   }
 
-  .hero__actions {
-    width: min(100%, 360px);
-    flex-direction: column;
-  }
-
-  .hero__resources {
-    width: min(100%, 360px);
-    margin-right: auto;
-    margin-left: auto;
+  .hero__entries {
+    width: min(100%, 420px);
   }
 
   .button {
@@ -1016,37 +1015,95 @@ html[data-language]:not([data-language="zh"]) .hero__platforms [data-zh-only] {
   flex: 1;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   width: 100%;
 }
 
 .contact {
-  width: min(100%, 560px);
-  padding: clamp(28px, 4vw, 44px) clamp(20px, 4vw, 40px);
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: min(100%, 640px);
+  padding: clamp(36px, 6vw, 64px) clamp(20px, 4vw, 40px) 72px;
 }
 
 .contact__eyebrow {
-  display: inline-block;
-  margin-bottom: 20px;
+  display: block;
+  margin: 0 0 8px;
   color: var(--fg-soft);
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  text-align: center;
+}
+
+.contact-channel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  transition: background-color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.contact-channel:hover {
+  background: var(--surface-2);
+}
+
+.contact-channel__icon {
+  display: flex;
+  width: 28px;
+  height: 28px;
+}
+
+.contact-channel__icon svg {
+  display: block;
+  width: 28px;
+  height: 28px;
+}
+
+.contact-channel__label {
+  display: block;
+  color: var(--ink-0);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.contact-channel__desc {
+  display: block;
+  margin-top: 3px;
+  color: var(--fg-soft);
+  font-size: 13px;
+}
+
+.contact-channel__value {
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
 .qr-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 18px;
-  max-width: 360px;
-  margin: 0 auto;
-  padding: 28px;
+  gap: 16px;
+  padding: 24px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--surface);
+}
+
+.qr-card__label {
+  color: var(--ink-0);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
 }
 
 .qr-card img {
@@ -1057,66 +1114,106 @@ html[data-language]:not([data-language="zh"]) .hero__platforms [data-zh-only] {
   border-radius: 4px;
 }
 
-.contact-alt {
-  margin: 32px auto 0;
-  text-align: left;
-}
-
-.contact-alt__head {
-  display: block;
-  margin-bottom: 12px;
-  color: var(--fg-soft);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  text-align: center;
-}
-
-.contact-alt__list {
-  display: grid;
-  gap: 1px;
-  overflow: hidden;
+.contact-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--line);
-}
-
-.contact-alt__row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 16px;
-  padding: 16px 18px;
+  border-radius: 10px;
   background: var(--surface);
-  transition: background-color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-a.contact-alt__row:hover {
-  background: var(--surface-2);
-}
-
-.contact-alt__label {
-  display: block;
+.contact-form h2 {
+  margin: 0;
   color: var(--ink-0);
-  font-size: 14px;
+  font-size: 20px;
   font-weight: 500;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
 
-.contact-alt__desc {
-  display: block;
-  margin-top: 3px;
+.contact-form__lead {
+  margin: 0;
   color: var(--fg-soft);
-  font-size: 12.5px;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
-.contact-alt__value {
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-field label {
   color: var(--fg-muted);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.form-field input,
+.form-field textarea {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--canvas);
+  outline: none;
+}
+
+.form-field input {
+  min-height: 44px;
+  padding: 0 14px;
+}
+
+.form-field textarea {
+  min-height: 120px;
+  padding: 12px 14px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.form-field input:focus,
+.form-field textarea:focus {
+  border-color: var(--ink-0);
+}
+
+.contact-form .button {
+  align-self: flex-start;
+  min-width: 160px;
+}
+
+.contact-form .button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.form-alert {
+  margin: 0;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.honeypot {
+  position: fixed;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+@media (max-width: 560px) {
+  .contact-channel {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .contact-channel__value {
+    grid-column: 2;
+    white-space: normal;
+  }
+
+  .contact-form .button {
+    width: 100%;
+  }
 }
 
 /* ── Setup / connect page ─────────────────────────────────── */
