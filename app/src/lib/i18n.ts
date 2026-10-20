@@ -9,7 +9,7 @@ const supportedLanguages: Language[] = ["zh", "en"];
 
 /** Agent points granted on first sign-in. Shown by the account menu and by the
  *  api-error copy that offers the built-in model as a way out of a spent key. */
-export const SIGNUP_BONUS_POINTS = 50;
+export const SIGNUP_BONUS_POINTS = import.meta.env.VITE_SOCAI_DEMO === "true" ? 500 : 50;
 
 // Active IANA timezone for displaying task timestamps. `undefined` follows the
 // system local zone. This is a display-only preference (no backend field) — it
@@ -56,6 +56,8 @@ const messages = {
     en: "connect chrome to start",
     zh: "连接 chrome 后开始",
   },
+  "chrome.managedTitle": { en: "Connect independent Chrome", zh: "连接独立 Chrome" },
+  "chrome.managedHelp": { en: "Sign in to Xiaohongshu in the new window once. socai keeps this profile for later tasks.", zh: "首次在新开的窗口登录小红书，后续任务会保留登录状态。" },
   "chrome.setupTitle": {
     en: "connect agent to chrome",
     zh: "帮Agent连接到Chrome",
@@ -175,8 +177,12 @@ const messages = {
   "auth.or": { en: "or", zh: "或" },
   "auth.loginTitle": { en: "sign in with phone", zh: "手机号登录" },
   "auth.loginAgentHint": {
-    en: "sign in to get {points} points of agent credit",
-    zh: "登录后获赠{points}点 agent额度",
+    en: import.meta.env.VITE_SOCAI_DEMO === "true"
+      ? "new accounts receive {points} trial points during this limited demo offer"
+      : "new accounts receive {points} points of agent credit",
+    zh: import.meta.env.VITE_SOCAI_DEMO === "true"
+      ? "活动期内新用户注册赠送{points}点试用额度，限量100名"
+      : "新用户注册赠送{points}点 agent额度",
   },
   "auth.useOwnApiKey": {
     en: "or use your own API key, no sign-in required",
@@ -584,6 +590,8 @@ const messages = {
   "task.working": { en: "working…", zh: "运行中…" },
   "task.activityLabel": { en: "activity", zh: "运行过程" },
   "task.partialResult": { en: "partial result", zh: "部分结果" },
+  "task.readingStats": { en: "RedNote · Previewed {preview} · Read in detail {detail} · Comments {comments} · Authors {authors}", zh: "小红书 · 速读 {preview} 篇 · 精读 {detail} 篇 · 评论 {comments} 条 · 作者 {authors} 位" },
+  "task.readingStatsHint": { en: "Xiaohongshu sources in this turn; other platforms are not included. Previews exclude detail reads (including cached material). Comments include collected replies. Authors count visited profiles.", zh: "仅统计本轮小红书材料，不包含其他平台。速读为仅有卡片/预览的帖子；精读为已取得详情的帖子（含缓存材料）；评论含已读取回复；作者为实际访问过主页的人。两种帖子数不重复累计。" },
   "task.interruptedAppClosed": {
     en: "the app was closed before this task finished.",
     zh: "应用在任务完成前已关闭。",
@@ -592,13 +600,22 @@ const messages = {
   "task.progressReading": { en: "reading", zh: "读取笔记" },
   "task.progressOcr": { en: "reading images", zh: "识别图片文字" },
   "task.notesLabel": { en: "notes", zh: "笔记" },
-  "task.materialsLabel": { en: "post materials", zh: "帖子素材" },
-  "task.materialsAria": { en: "grouped post materials", zh: "分组帖子素材" },
+  "task.materialsLabel": { en: "Files and materials", zh: "文件和素材" },
+  "task.materialsAria": { en: "Files and materials", zh: "文件和素材" },
   "note.commentsHead": { en: "{n} comments", zh: "共 {n} 条评论" },
   "note.authorBadge": { en: "author", zh: "作者" },
   "note.transcript": { en: "transcript", zh: "语音转写" },
   "note.openExternal": { en: "open on xiaohongshu", zh: "在小红书打开" },
   "task.replyPlaceholder": { en: "ask a follow-up…", zh: "继续追问…" },
+  "task.workflow": { en: "Expert mode", zh: "专家模式" },
+  "task.workflowGeneral": { en: "General", zh: "通用" },
+  "task.workflowVc": { en: "VC research", zh: "VC 研究" },
+  "task.depthLight": { en: "Quick", zh: "快速" },
+  "task.depthDeep": { en: "Deep", zh: "深度" },
+  "task.researchLight": { en: "Quick research", zh: "快速研究" },
+  "task.researchMode": { en: "Deep research", zh: "深度研究" },
+  "task.researchEnabledHint": { en: "Explore more directions and follow promising leads. Click for a lighter first pass.", zh: "扩大探索、选择性深入有价值的线索。点击切换为快速研究。" },
+  "task.researchAutoHint": { en: "A lighter first pass. Click to invest more in exploration; expert mode and sources stay the same.", zh: "先做快速探索。点击增加研究投入；专家模式和来源保持不变。" },
   "task.replyConnectHint": {
     en: "connect chrome to send a follow-up",
     zh: "连接 chrome 后可继续追问",
@@ -761,7 +778,7 @@ const messages = {
     zh: "也可以在账号菜单中切换到 socai 内置模型，使用账号点数、无需 API Key。",
   },
 
-  "artifact.intermediate": { en: "Intermediate files ({count})", zh: "中间文件（{count}）" },
+  "artifact.intermediate": { en: "Intermediate files", zh: "中间文件" },
   "artifact.listAria": { en: "generated files", zh: "生成的文件" },
   "artifact.more": { en: "More", zh: "更多" },
   "artifact.moreAria": { en: "More options for {name}", zh: "{name} 的更多操作" },
@@ -1419,7 +1436,7 @@ export function formatTokenUsage(
       : `cache write ${number(cacheCreationInputTokens)}`);
   }
   if (estimatedCost !== null && costCurrency) {
-    const cents = Math.trunc(estimatedCost * 100) / 100;
+    const cents = estimatedCost;
     let amount: string;
     try {
       amount = new Intl.NumberFormat(locale, {
