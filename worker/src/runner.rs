@@ -831,6 +831,8 @@ async fn execute_run_inner(
         run_dir: Some(prepared.run_dir.clone()),
         session_id: Some(spec.binding.session_id.clone()),
         billing_task_id: Some(spec.run_id.clone()),
+        // Account memory belongs to the web app. This session home is not it.
+        local_memory: false,
         remote_ocr: match (spec.remote_ocr, spec.host_tool_endpoint.as_ref()) {
             (true, Some(endpoint)) => Some(RemoteOcrConfig::new(
                 endpoint.url.clone(),

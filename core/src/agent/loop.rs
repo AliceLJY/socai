@@ -12,6 +12,7 @@
 //! Cross-cutting concerns are split out:
 //! - `signature.rs` — md5 fingerprint for repeated-call detection
 //! - `memory.rs`    — windowing the message history once it's long
+//! - `local_memory.rs` — cross-task summary injected into later runs
 //! - `report.rs`    — final report enrichment with artifact links
 //! - `compaction.rs` — truncating tool_result bodies for the history budget
 //! - `run_logging.rs` — canonical agent-run / LLM-step / tool-call records
@@ -34,6 +35,7 @@ use crate::agent::llm::{
     Backend, Block, LLMResponse, Message, StopReason, TokenUsage, ToolCall, ToolResultContent,
     ToolSchema,
 };
+use crate::agent::local_memory::{self, memory_prompt};
 use crate::agent::memory::{
     compact_messages_for_context, DEFAULT_COMPACT_AFTER_MESSAGES, DEFAULT_KEEP_RECENT_MESSAGES,
 };
@@ -143,6 +145,9 @@ pub struct AgentOptions {
     /// by tools. A recovered call is retried once; failed recovery switches
     /// the loop to bounded local delivery followed by a partial summary.
     pub tool_failure_recovery: Option<SharedToolFailureRecovery>,
+    /// Read and update `~/.socai/memories` for this run. Hosted workers turn
+    /// this off; their session home is not the durable local task store.
+    pub local_memory: bool,
 }
 
 impl Default for AgentOptions {
@@ -163,6 +168,7 @@ impl Default for AgentOptions {
             billing_task_id: None,
             remote_ocr: None,
             tool_failure_recovery: None,
+            local_memory: true,
         }
     }
 }
@@ -333,7 +339,16 @@ pub async fn run_agent_with_events(
     let initial_instructions = super::skills::load_initial_skills(&options.initial_skills, &ctx)
         .await?
         .join("\n\n");
-    let extra_instructions = format!("{}\n\n{}", options.extra_instructions, initial_instructions);
+    let memory_instructions = options.local_memory.then(memory_prompt).unwrap_or_default();
+    let extra_instructions = [
+        options.extra_instructions.trim(),
+        initial_instructions.trim(),
+        memory_instructions.trim(),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n\n");
     let mut anchor_user_index = options.seed_messages.len();
     let is_follow_up = !options.seed_messages.is_empty();
     // Everything before this index is already in the trace: seed messages were
@@ -1283,6 +1298,17 @@ pub async fn run_agent_with_events(
 
     let enriched_report = report_with_artifacts(&final_text, Some(&run_state));
     let _ = std::fs::write(run_dir.join("report.md"), &enriched_report);
+    if options.local_memory && terminal_error.is_none() {
+        local_memory::record_completed_run(
+            backend.as_ref(),
+            &run_id,
+            &run_dir,
+            options.session_id.as_deref(),
+            task,
+            &enriched_report,
+        )
+        .await;
+    }
 
     let status = if terminal_error.is_some() {
         "failed"

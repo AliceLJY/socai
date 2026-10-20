@@ -248,4 +248,31 @@ pub trait Backend: Send + Sync {
         tools: &[ToolSchema],
         max_tokens: u32,
     ) -> anyhow::Result<LLMResponse>;
+
+    /// One recall note for a finished run, using this backend's model.
+    async fn summarize_for_memory(&self, task: &str, report: &str) -> anyhow::Result<String> {
+        let (system, user) = crate::agent::local_memory::summary_prompt(task, report);
+        let response = self.send(&system, &[Message::user(user)], &[], 512).await?;
+        crate::agent::local_memory::accept_summary_note(&response.text_blocks.join("\n"))
+    }
+
+    /// Fold older memory plus one batch of task notes into a single summary.
+    async fn compress_memory_history(&self, previous: &str, batch: &str) -> anyhow::Result<String> {
+        let (system, user) = crate::agent::local_memory::rollup_prompt(previous, batch);
+        let response = self
+            .send(&system, &[Message::user(user)], &[], 2048)
+            .await?;
+        let mut text = response.text_blocks.join("\n");
+        for _ in 0..2 {
+            if text.chars().count() <= 1_000 {
+                break;
+            }
+            let (system, user) = crate::agent::local_memory::shorten_prompt(&text);
+            let response = self
+                .send(&system, &[Message::user(user)], &[], 2048)
+                .await?;
+            text = response.text_blocks.join("\n");
+        }
+        crate::agent::local_memory::accept_rollup(&text)
+    }
 }

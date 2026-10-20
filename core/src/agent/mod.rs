@@ -10,6 +10,7 @@ pub mod conversation;
 pub mod extensions;
 pub mod file_bash_tools;
 pub mod llm;
+pub mod local_memory;
 pub mod r#loop;
 pub mod memory;
 pub mod note_store;

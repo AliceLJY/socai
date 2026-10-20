@@ -1017,7 +1017,63 @@ impl Backend for OpenAICompatBackend {
         }
 
         let body = self.build_chat_request(system, messages, tools, max_tokens);
+        self.post_chat(body).await
+    }
 
+    async fn summarize_for_memory(&self, task: &str, report: &str) -> anyhow::Result<String> {
+        let (system, user) = crate::agent::local_memory::summary_prompt(task, report);
+        let text = self.complete_memory(&system, &user, 512).await?;
+        crate::agent::local_memory::accept_summary_note(&text)
+    }
+
+    async fn compress_memory_history(&self, previous: &str, batch: &str) -> anyhow::Result<String> {
+        let (system, user) = crate::agent::local_memory::rollup_prompt(previous, batch);
+        let mut text = self.complete_memory(&system, &user, 2048).await?;
+        for _ in 0..2 {
+            if text.chars().count() <= 1_000 {
+                break;
+            }
+            let (system, user) = crate::agent::local_memory::shorten_prompt(&text);
+            text = self.complete_memory(&system, &user, 2048).await?;
+        }
+        crate::agent::local_memory::accept_rollup(&text)
+    }
+}
+
+impl OpenAICompatBackend {
+    /// Memory calls disable thinking so the token budget is spent on the note.
+    async fn complete_memory(
+        &self,
+        system: &str,
+        user: &str,
+        max_tokens: u32,
+    ) -> anyhow::Result<String> {
+        if self.provider == Provider::OpenAI {
+            let response = self
+                .send(system, &[Message::user(user.to_string())], &[], max_tokens)
+                .await?;
+            return Ok(response.text_blocks.join("\n"));
+        }
+        let mut body =
+            self.build_chat_request(system, &[Message::user(user.to_string())], &[], max_tokens);
+        match self.provider {
+            Provider::DeepSeek | Provider::Kimi => {
+                body.extra
+                    .insert("thinking".into(), json!({"type": "disabled"}));
+            }
+            Provider::Qwen | Provider::QwenIntl => {
+                body.extra
+                    .insert("enable_thinking".into(), Value::Bool(false));
+            }
+            _ => {}
+        }
+        let response = self.post_chat(body).await?;
+        Ok(response.text_blocks.join("\n"))
+    }
+}
+
+impl OpenAICompatBackend {
+    async fn post_chat(&self, body: OutgoingRequest) -> anyhow::Result<LLMResponse> {
         let mut request = self.client.post(self.url()).bearer_auth(self.api_key()?);
         if self.provider == Provider::Socai {
             // Let the hosted gateway return its own 600s timeout and settle usage.

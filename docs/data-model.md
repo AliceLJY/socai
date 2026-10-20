@@ -150,6 +150,30 @@ its typed timeline from `run.json`, `llm/*.response.json`, and each referenced
 tool's `tool.json` and `output.json`. It does not persist a duplicate
 `timeline.jsonl`.
 
+## Local memory
+
+`~/.socai/memories/` is recall for later local runs. It is not another copy of
+the execution log. `$SOCAI_HOME/memories` is used when `SOCAI_HOME` is set.
+
+```text
+~/.socai/memories/
+├── entries.jsonl        # one completed agent run per line
+├── memory_tasks.md      # one model-written note per task
+├── memory_summary.md    # the text injected into the next local run
+└── memory_state.json    # compressed narrative and which tasks are folded in
+```
+
+`entries.jsonl` stores the run id, absolute run directory, optional session
+id, a short task line, a finish time, and the task note. When a local run
+completes, that run's model writes the note from the report: what the user
+was trying to find out, then the result, without follow-up plans or file paths.
+`memory_tasks.md` lists those notes. `memory_summary.md` is the history the
+next run sees. The newest tasks, up to four, are copied in as written. The
+fifth waiting note is folded, with the previous narrative, into one summary
+of at most 1000 characters, and the recent window starts over. The final
+answer and tool evidence stay in the L2 run directory. Hosted worker
+sessions do not write this directory.
+
 ## Ownership table
 
 | Fact | Single durable owner |
@@ -167,6 +191,10 @@ tool's `tool.json` and `output.json`. It does not persist a duplicate
 | Downloaded media and registry | L3 `site_media/`, `media_manifest.json` |
 | OCR details | L3 `stats/ocr.json` |
 | Debug browser state | L3 `snapshots/` |
+| Cross-task recall summary | `~/.socai/memories/memory_summary.md` |
+| Cross-task task notes | `~/.socai/memories/memory_tasks.md` |
+| Cross-task fold state | `~/.socai/memories/memory_state.json` |
+| Cross-task recall index | `~/.socai/memories/entries.jsonl` |
 
 These local files currently have no external schema consumer or migration
 reader, so they intentionally do not carry a `schema_version` field.
