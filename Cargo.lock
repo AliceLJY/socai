@@ -5419,7 +5419,7 @@ dependencies = [
 
 [[package]]
 name = "socai-cli"
-version = "0.6.7"
+version = "0.6.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -5439,7 +5439,7 @@ dependencies = [
 
 [[package]]
 name = "socai-core"
-version = "0.6.7"
+version = "0.6.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5502,7 +5502,7 @@ dependencies = [
 
 [[package]]
 name = "socai_app"
-version = "0.6.7"
+version = "0.6.8"
 dependencies = [
  "anyhow",
  "async-trait",
