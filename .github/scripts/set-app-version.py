@@ -70,6 +70,17 @@ def update_cargo_lock(path: Path, version: str) -> None:
     path.write_text(text)
 
 
+def update_core_dependency(path: Path, version: str) -> None:
+    text, count = re.subn(
+        r'(?m)^(socai-core\s*=\s*\{[^\n]*\bversion\s*=\s*")=[^"]+("[^\n]*\})',
+        lambda match: f"{match.group(1)}={version}{match.group(2)}",
+        path.read_text(),
+    )
+    if count != 1:
+        raise SystemExit(f"expected exactly one pinned socai-core dependency in {path}")
+    path.write_text(text)
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("usage: set-app-version.py VERSION")
@@ -82,6 +93,7 @@ def main() -> None:
     update_json_version(Path("app/src-tauri/tauri.conf.json"), version)
     update_section_version(Path("app/src-tauri/Cargo.toml"), "package", version)
     update_section_version(Path("Cargo.toml"), "workspace.package", version)
+    update_core_dependency(Path("Cargo.toml"), version)
     update_cargo_lock(Path("Cargo.lock"), version)
 
 
