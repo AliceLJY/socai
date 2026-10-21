@@ -149,6 +149,7 @@ pub async fn run_stdio_with_build_info(build: WorkerBuildInfo) -> Result<()> {
                         host_tool_endpoint,
                         remote_ocr,
                         external_write_grants,
+                        research,
                         ..
                     } => {
                         if bound.as_ref() != Some(&binding) {
@@ -160,6 +161,10 @@ pub async fn run_stdio_with_build_info(build: WorkerBuildInfo) -> Result<()> {
                             send_error(&output_tx, Some(request_id), "session_busy", "session already has an active run");
                             continue;
                         }
+                        let research = match serde_json::from_value::<socai_core::agent::research_options::ResearchOptions>(if research.is_null() { serde_json::json!({}) } else { research }) {
+                            Ok(value) if value.validate().is_ok() => value,
+                            _ => { send_error(&output_tx, Some(request_id), "invalid_research", "Invalid research options"); continue; }
+                        };
                         let spec = RunSpec {
                             binding: binding.clone(),
                             run_id: run_id.clone(),
@@ -173,6 +178,7 @@ pub async fn run_stdio_with_build_info(build: WorkerBuildInfo) -> Result<()> {
                             host_tool_endpoint,
                             remote_ocr,
                             external_write_grants,
+                            research,
                         };
                         let prepared = match prepare_run(&session_dir, &spec) {
                             Ok(value) => value,

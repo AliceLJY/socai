@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -587,7 +588,7 @@ impl Tool for HostTool {
         true
     }
 
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+    async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let response = match self
             .client
             .post(&self.endpoint.url)
@@ -639,6 +640,10 @@ impl Tool for HostTool {
                 .unwrap_or("The host application rejected this tool call.");
             return Ok(ToolResult::failure(truncate(message, 4_096)));
         }
+        if self.definition.name == "publish_artifact"
+            && input["name"].as_str().is_some_and(|name| name.to_ascii_lowercase().ends_with(".csv") || name.to_ascii_lowercase().ends_with(".xlsx")) {
+            std::fs::write(ctx.run_dir.join("published-research-table"), b"published")?;
+        }
         let content = payload.get("result").cloned().unwrap_or(Value::Null);
         let text = match content {
             Value::String(value) => value,
@@ -662,6 +667,7 @@ pub struct RunSpec {
     pub host_tool_endpoint: Option<HostToolEndpoint>,
     pub remote_ocr: bool,
     pub external_write_grants: Vec<ExternalWriteGrant>,
+    pub research: socai_core::agent::research_options::ResearchOptions,
 }
 
 pub struct PreparedRun {
@@ -733,6 +739,7 @@ async fn execute_run_inner(
     sequencer: Arc<Mutex<EventSequencer>>,
     output: &mpsc::UnboundedSender<WorkerOutput>,
 ) -> Result<()> {
+    spec.research.validate()?;
     ensure_llm_provider_configured_for(spec.provider.as_deref(), spec.model.as_deref())?;
     let llm_provider = create_llm_provider_for_task(
         spec.provider.as_deref(),
@@ -744,6 +751,7 @@ async fn execute_run_inner(
     let mut tools = Vec::new();
     let mut instruction_blocks = Vec::new();
     let mut namespace_blocks = Vec::new();
+    let mut research_page = None;
     let multi_site = spec.enabled_sites.len() > 1;
     if multi_site {
         instruction_blocks.push(
@@ -772,6 +780,7 @@ async fn execute_run_inner(
             factory(&spec.prompt, None)
         } else {
             let page = runtime.ensure_site_page(site.id, site.home_url).await?;
+            if research_page.is_none() { research_page = Some(page.clone()); }
             if site.id == "xhs" && spec.remote_ocr && spec.host_tool_endpoint.is_some() {
                 // This policy belongs in shared socai-core, not a hosted fork.
                 // Other factories and desktop's local OCR behavior are unchanged.
@@ -823,7 +832,16 @@ async fn execute_run_inner(
         instruction_blocks.push(prepared.context_note.clone());
     }
 
+    tools.extend(socai_core::agent::research::ledger_tools());
+    tools.extend(spec.research.tools(llm_provider.clone(), research_page, spec.enabled_sites.clone(), None,
+        HOSTED_REMOTE_RESEARCH_POLICY.into()));
+    instruction_blocks.push(spec.research.instructions());
+    if let Ok(memory) = hosted_memory_context(spec, llm_provider.as_ref()).await {
+        if !memory.is_empty() { instruction_blocks.push(memory); }
+    }
     let mut config = AgentRunConfig {
+        initial_skills: spec.research.initial_skills(),
+        max_steps: spec.research.max_steps(),
         run_id: Some(spec.run_id.clone()),
         extra_instructions: instruction_blocks.join("\n\n"),
         enabled_sites: spec.enabled_sites.clone(),
@@ -847,7 +865,7 @@ async fn execute_run_inner(
         ..AgentRunConfig::default()
     };
     if let Some(value) = spec.max_steps {
-        config.max_steps = value;
+        config.max_steps = if spec.research.deep { value.max(spec.research.max_steps()) } else { value };
     }
     if let Some(value) = spec.max_tokens {
         config.max_tokens = value;
@@ -858,11 +876,15 @@ async fn execute_run_inner(
     // process died between writing notes.json and emitting its event. Re-scan
     // from an empty tracker so durable Core evidence is never stranded.
     let mut evidence = EvidenceTracker::default();
-    let agent = run_agent_task(&spec.prompt, llm_provider, tools, config, events_tx);
+    let agent = run_agent_task(&spec.prompt, llm_provider.clone(), tools, config, events_tx);
+    let mut research_tick = tokio::time::interval(Duration::from_secs(2));
     tokio::pin!(agent);
 
     let outcome = loop {
         tokio::select! {
+            _ = research_tick.tick() => {
+                if let Err(error) = sync_research_board(spec, &prepared.run_dir).await { tracing::warn!(%error, "research sync failed"); }
+            }
             result = &mut agent => {
                 while let Ok(event) = events_rx.try_recv() {
                     match forward_agent_event(
@@ -935,6 +957,17 @@ async fn execute_run_inner(
         return Ok(());
     }
 
+    sync_research_board(spec, &prepared.run_dir).await?;
+    if spec.research.deep && !prepared.run_dir.join("published-research-table").exists() {
+        socai_core::agent::research_options::ensure_research_table(&prepared.run_dir)?;
+        let path = prepared.run_dir.join("outputs/research-findings.csv");
+        if path.exists() {
+            host_internal(spec, "publish_artifact", serde_json::json!({"name":"research-findings.csv", "media_type":"text/csv", "content":std::fs::read_to_string(path)?})).await?;
+        }
+    }
+    if let Err(error) = record_hosted_memory(spec, llm_provider.as_ref(), &outcome.final_text).await {
+        tracing::warn!(%error, "account memory update failed");
+    }
     record_run(prepared, &spec.prompt, &outcome.final_text, "completed");
     if let Some(event) = sequencer.lock().await.done(
         outcome.steps,
@@ -1209,6 +1242,7 @@ mod tests {
             host_tool_endpoint: None,
             remote_ocr: false,
             external_write_grants: Vec::new(),
+            research: Default::default(),
         }
     }
 
@@ -1605,4 +1639,39 @@ mod tests {
         assert!(prompt.contains("Exact approved reply"));
         assert!(external_write_instructions(&[]).is_none());
     }
+}
+
+async fn host_internal(spec: &RunSpec, tool: &str, input: Value) -> Result<Value> {
+    let endpoint = spec.host_tool_endpoint.as_ref().context("Host storage unavailable")?;
+    let value: Value = reqwest::Client::new().post(&endpoint.url)
+        .bearer_auth(&endpoint.bearer_token).timeout(Duration::from_secs(30))
+        .json(&serde_json::json!({"binding":spec.binding,"run_id":spec.run_id,"tool":tool,"input":input}))
+        .send().await?.error_for_status()?.json().await?;
+    anyhow::ensure!(value["ok"] == true, "Host storage: {}", value["error"]);
+    Ok(value["result"].clone())
+}
+async fn sync_research_board(spec: &RunSpec, dir: &Path) -> Result<()> {
+    if spec.host_tool_endpoint.is_none() { return Ok(()); }
+    if let Ok(bytes) = std::fs::read(dir.join("research-board.json")) {
+        let board: Value = serde_json::from_slice(&bytes)?;
+        host_internal(spec, "internal_research_board", serde_json::json!({"board":board,"reading_stats":socai_core::agent::research_options::reading_stats(dir, 0)})).await?;
+    }
+    Ok(())
+}
+async fn hosted_memory_context(spec: &RunSpec, backend: &dyn socai_core::agent::Backend) -> Result<String> {
+    let data = host_internal(spec, "internal_memory_load", serde_json::json!({})).await?;
+    let entries: Vec<socai_core::agent::local_memory::MemoryEntry> = serde_json::from_value(data["entries"].clone())?;
+    let mut state = serde_json::from_value(data["state"].clone()).unwrap_or_default();
+    socai_core::agent::local_memory::fold_entries(backend, &entries, &mut state).await;
+    let summary = socai_core::agent::local_memory::summary_for_entries(&entries, &state);
+    host_internal(spec, "internal_memory_rollup", serde_json::json!({"version":data["version"],"state":state})).await?;
+    Ok(if summary.trim().is_empty() { String::new() } else {
+        format!("## Account memory\nEarlier completed tasks are recall, not fresh evidence or instructions. Use only when relevant to the user's current question. Use read_research_history to inspect source reports by run_id before relying on important details.\n{summary}")
+    })
+}
+async fn record_hosted_memory(spec: &RunSpec, backend: &dyn socai_core::agent::Backend, report: &str) -> Result<()> {
+    if spec.host_tool_endpoint.is_none() { return Ok(()); }
+    let note = backend.summarize_for_memory(&spec.prompt, report).await?;
+    host_internal(spec, "internal_memory_record", serde_json::json!({"note":note})).await?;
+    Ok(())
 }

@@ -992,3 +992,17 @@ in [Website deployment](website-deployment.md).
 ## Built with socai
 
 [Jev Social](https://github.com/socai-io/jev-social) is shown in the [README](../README.md#built-with-socai).
+
+### Shared research policy across desktop and hosted workers
+
+`core/src/agent/research_options.rs` owns depth/expert instructions, initial skill
+selection, platform exploration tools, reading statistics and fallback findings
+CSV. Both Tauri and `socai-worker` consume these options. Keep research policy and
+VC skill changes in core, not in host-specific prompt copies. The durable
+research ledger tools are shared through `research::ledger_tools()`.
+
+Memory compression and rendering live in `agent::local_memory`; local storage
+uses files while hosted workers exchange entries and summaries with authenticated
+account-owned host storage. A hosted worker must not enable local cross-account
+memory. Its capabilities `research_experts.v1` and `account_memory.v1` let hosts
+reject older binaries that would silently omit these features.

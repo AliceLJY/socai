@@ -776,12 +776,7 @@ pub fn local_agent_tools() -> Vec<SharedTool> {
         std::sync::Arc::new(ShellTool::unrestricted()),
     ];
     tools.extend(crate::agent::skills::skill_tools());
-    tools.push(std::sync::Arc::new(
-        crate::agent::research::ResearchUpdateTool,
-    ));
-    tools.push(std::sync::Arc::new(
-        crate::agent::research::ResearchReadTool,
-    ));
+    tools.extend(crate::agent::research::ledger_tools());
     tools
 }
 

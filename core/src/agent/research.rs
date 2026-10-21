@@ -766,3 +766,8 @@ impl Tool for ResearchUpdateTool {
         Ok(ToolResult::text(result))
     }
 }
+
+/// Durable research ledger tools, shared by local and hosted entrypoints.
+pub fn ledger_tools() -> Vec<crate::agent::SharedTool> {
+    vec![std::sync::Arc::new(ResearchUpdateTool), std::sync::Arc::new(ResearchReadTool)]
+}

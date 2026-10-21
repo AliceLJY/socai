@@ -1535,24 +1535,7 @@ pub async fn agent_task_reading_stats(
     tauri::async_runtime::spawn_blocking(move || {
         let mut result = Vec::new();
         for (index, (dir, _)) in dirs.into_iter().enumerate() {
-            if let Some(stats) = socai_core::sites::xhs::reading_stats::for_run(&dir) {
-                result.push(json!({"turn_index":index,"site":"xhs","authors_kind":"profiles","preview_notes":stats.preview_notes,"detail_notes":stats.detail_notes,"comments":stats.comments,"authors":stats.authors}));
-            }
-            let mut sites: std::collections::BTreeMap<String, (usize,usize,usize,std::collections::BTreeSet<String>)> = Default::default();
-            fn count_comments(value: &Value) -> usize {
-                value.as_array().map(|items| items.iter().map(|c| usize::from(c["text"].as_str().is_some_and(|s| !s.is_empty())) + count_comments(&c["replies"])).sum()).unwrap_or(0)
-            }
-            for note in socai_core::agent::note_store::load_notes(&dir) {
-                let site = note["site"].as_str().unwrap_or("xhs");
-                if site == "xhs" { continue; }
-                let row = sites.entry(site.to_string()).or_default();
-                if note["level"] == "deep" { row.1 += 1; } else { row.0 += 1; }
-                row.2 += count_comments(&note["comments"]);
-                if let Some(author) = note["author"]["url"].as_str().or_else(|| note["author"]["handle"].as_str()).or_else(|| note["author"]["name"].as_str()).filter(|s| !s.is_empty()) { row.3.insert(author.to_string()); }
-            }
-            for (site, (preview,detail,comments,authors)) in sites {
-                result.push(json!({"turn_index":index,"site":site,"authors_kind":"observed","preview_notes":preview,"detail_notes":detail,"comments":comments,"authors":authors.len()}));
-            }
+            result.extend(socai_core::agent::research_options::reading_stats(&dir, index));
         }
         result
     }).await.map_err(|e| e.to_string())
@@ -3433,22 +3416,14 @@ async fn run_agent_task_on_session_page(
                 tools.extend(factory(task, language));
             }
         }
-        let workflow_instructions = if workflow == TaskWorkflow::Vc {
-            include_str!("../../../core/src/agent/skills/vc-research/SKILL.md").to_string()
-        } else if workflow == TaskWorkflow::Custom {
-            selection.as_ref().and_then(|s| s.custom_workflow.as_ref()).map(|s| s.instructions.clone()).unwrap_or_default()
-        } else { String::new() };
-        let board = Arc::new(socai_core::agent::research_board::ResearchBoardTool::default());
-        tools.push(board.clone());
-        tools.push(Arc::new(socai_core::sites::explore::ExplorePlatformsTool {
-            backend: llm_provider.clone(),
-            page: browser.as_ref().map(|(_, _, page)| page.clone()),
-            sites: available_sites.clone(),
-            language: language.map(str::to_string),
-            workflow: workflow_instructions.clone(),
-            board,
+        let research = socai_core::agent::research_options::ResearchOptions {
             deep: research_mode,
-        }));
+            workflow: match workflow { TaskWorkflow::Vc => "vc", TaskWorkflow::Custom => "custom", _ => "general" }.into(),
+            custom_instructions: selection.as_ref().and_then(|s| s.custom_workflow.as_ref()).map(|s| s.instructions.clone()).unwrap_or_default(),
+            automatic_sources: auto_sources,
+        };
+        research.validate()?;
+        tools.extend(research.tools(llm_provider.clone(), browser.as_ref().map(|(_, _, p)| p.clone()), available_sites.clone(), language.map(str::to_string), String::new()));
         tools.extend(desktop_agent_tools());
         tools.push(Arc::new(PublishArtifactTool::new(
             session_dir.as_deref().map(PathBuf::from),
@@ -3499,31 +3474,15 @@ async fn run_agent_task_on_session_page(
             .filter(|site| site.browserless_tools.is_some())
             .map(|site| site.default_agent_instructions.unwrap_or(site.agent_instructions)(""))
             .collect::<Vec<_>>().join("\n\n");
-        let mut initial_skills = Vec::new();
-        if workflow == TaskWorkflow::Vc { initial_skills.push("vc-research".into()); }
-        if research_mode { initial_skills.push("research".into()); }
-        let depth_instructions = if research_mode {
-            "Research depth: deep. Explore complementary directions before converging; follow promising signals selectively. Use the larger budget for useful discovery, not repeated verification or a quota. Reserve time for delivery."
-        } else {
-            "Research depth: light. Produce a useful first pass within the smaller budget, preserving relevant uncertain leads. Do not turn this into exhaustive research or diligence. Loading a skill does not change this budget."
-        };
         let config = AgentRunConfig {
-            max_steps: if research_mode { 120 } else { socai_core::agent::r#loop::DEFAULT_MAX_STEPS },
+            max_steps: research.max_steps(),
             extra_instructions: format!(
-                "{}{}{}{}{}{}\n\n{}\n\n{}\n\n{}\n\nResearch workbench: use update_research_board early to state platform focus and a short plan; add useful leads incrementally as found, including incomplete signals, and update next_steps when direction changes. This surface shows concise findings and actions, never private reasoning. Update after each useful discovery batch, without waiting for final synthesis. Include every distinct useful team/product/direction as a node even when no relationship is known. After each platform round, reconcile duplicate entities across platforms and add concrete sourced founder, team, product, dependency or collaboration relations. Never invent an edge merely to fill the graph. Keep sourced relationships distinct from hypotheses. For deep research, also save and publish a CSV or XLSX findings table with names, platforms, signals, source URLs, uncertainties and next steps; produce it once at delivery, even if only a few useful leads are available. Never invent rows to fill it.\n\n{}",
-                instructions,
-                TAURI_SITE_ROUTING_RULES,
-                TAURI_CITATION_RULES,
-                TAURI_ARTIFACT_RULES,
-                source_instructions,
-                instagram_login_note,
-                http_instructions,
-                depth_instructions,
-                workflow_instructions,
-                socai_core::agent::research_board::RELATION_GUIDANCE
+                "{}{}{}{}{}{}\n\n{}\n\n{}",
+                instructions, TAURI_SITE_ROUTING_RULES, TAURI_CITATION_RULES, TAURI_ARTIFACT_RULES,
+                source_instructions, instagram_login_note, http_instructions, research.instructions()
             ),
             enabled_sites: available_sites,
-            initial_skills,
+            initial_skills: research.initial_skills(),
             seed_messages,
             run_dir,
             session_id: Some(session_id),

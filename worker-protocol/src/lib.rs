@@ -239,6 +239,8 @@ pub enum WorkerCommand {
         remote_ocr: bool,
         #[serde(default)]
         external_write_grants: Vec<ExternalWriteGrant>,
+        #[serde(default)]
+        research: serde_json::Value,
     },
     #[serde(rename = "run.cancel")]
     RunCancel {

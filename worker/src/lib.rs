@@ -22,6 +22,8 @@ pub const WORKER_CAPABILITIES: &[&str] = &[
     "remote_ocr.v1",
     "multi_site_namespaces.v1",
     "parallel_platform_tools.v1",
+    "research_experts.v1",
+    "account_memory.v1",
     "persistent_conversation.v1",
     "run_sequence_resume.v1",
 ];

@@ -35,8 +35,9 @@ const REPORT_HEAD_CHARS: usize = 5_000;
 const REPORT_TAIL_CHARS: usize = 2_500;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct MemoryEntry {
+pub struct MemoryEntry {
     run_id: String,
+    #[serde(default)]
     run_dir: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
@@ -46,7 +47,7 @@ struct MemoryEntry {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct MemoryState {
+pub struct MemoryState {
     #[serde(default)]
     compressed: String,
     #[serde(default)]
@@ -230,13 +231,21 @@ async fn store_note_and_fold(
 
     let state_path = dir.join("memory_state.json");
     let mut state = read_state(&state_path)?;
+    fold_entries(backend, &entries, &mut state).await;
+
+    write_memory_files(&dir, &entries, &state)?;
+    Ok(())
+}
+
+/// Storage-independent folding, shared by local files and account-owned hosted storage.
+pub async fn fold_entries(backend: &dyn crate::agent::llm::Backend, entries: &[MemoryEntry], state: &mut MemoryState) {
     let live_ids: BTreeSet<_> = entries.iter().map(|entry| entry.run_id.as_str()).collect();
     state
         .folded_run_ids
         .retain(|run_id| live_ids.contains(run_id.as_str()));
 
     loop {
-        let pending = pending_entries(&entries, &state);
+        let pending = pending_entries(entries, state);
         if pending.len() < FOLD_BATCH {
             break;
         }
@@ -259,8 +268,9 @@ async fn store_note_and_fold(
         }
     }
 
-    write_memory_files(&dir, &entries, &state)?;
-    Ok(())
+}
+pub fn summary_for_entries(entries: &[MemoryEntry], state: &MemoryState) -> String {
+    render_summary(state, &pending_entries(entries, state))
 }
 
 fn pending_entries<'a>(entries: &'a [MemoryEntry], state: &MemoryState) -> Vec<&'a MemoryEntry> {
