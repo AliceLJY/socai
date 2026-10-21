@@ -11,7 +11,7 @@ pub struct ResearchOptions {
     pub workflow: String,
     pub custom_instructions: String,
     pub automatic_sources: bool,
-    /// Desktop-only implicit web worker; not a source-picker selection.
+    /// Host-enabled implicit web worker; not a source-picker selection.
     pub web_search: bool,
 }
 impl ResearchOptions {

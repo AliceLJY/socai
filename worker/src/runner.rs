@@ -832,6 +832,11 @@ async fn execute_run_inner(
         instruction_blocks.push(prepared.context_note.clone());
     }
 
+    // HTTP-only selections still need a browser parent for the implicit web
+    // worker, which opens and owns its own sibling tab.
+    if spec.research.deep && spec.research.web_search && research_page.is_none() {
+        research_page = Some(runtime.ensure_site_page("web", "about:blank").await?);
+    }
     tools.extend(socai_core::agent::research::ledger_tools());
     tools.extend(spec.research.tools(llm_provider.clone(), research_page, spec.enabled_sites.clone(), None,
         HOSTED_REMOTE_RESEARCH_POLICY.into()));
