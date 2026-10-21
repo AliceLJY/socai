@@ -1,0 +1,18 @@
+{
+  "id": "web",
+  "name": "Public web search (DuckDuckGo)",
+  "domains": ["html.duckduckgo.com"],
+  "notes": [],
+  "browserTools": {
+    "searchResults": {
+      "description": "Read the current DuckDuckGo HTML search results. Snippets are discovery leads, not full page reads. Returns an explicit reason when results are not available.",
+      "path": "page-tools.js",
+      "binding": "window.SocaiWebPageTools",
+      "callable": "searchResults",
+      "args": {
+        "query": {"type": "string", "required": true, "description": "Expected query used to open this search page."}
+      },
+      "returns": {"type": "object", "description": "Query, search URL and up to ten title/URL/snippet results, or a reason when unavailable."}
+    }
+  }
+}

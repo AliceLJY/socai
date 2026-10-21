@@ -148,6 +148,15 @@ not quotas or guarantees of candidate count. Loading a skill does not raise the
 budget. Workflow, depth and selected sources persist with each conversation and
 can be changed before a follow-up. Existing tasks default to General and Light.
 
+In deep mode, reading a post on a platform with comments (such as Xiaohongshu,
+X or Douyin) also includes a lightweight look at the first few available comments,
+typically 3–5. Useful praise, complaints, disagreements and recurring feedback
+are included as supplementary, source-linked findings. This small sample does
+not represent overall public opinion. Routine research does not deeply paginate
+comments or expand reply chains; unavailable comments do not block the main task.
+Explicit requests for reputation, sentiment or comment analysis determine the
+scope and depth instead.
+
 VC works with Auto, one platform, or multiple selected platforms. For broad
 sourcing with Auto, it defaults to Xiaohongshu, X, WeChat public articles,
 podcasts and GitHub. Explicit selections take precedence. The VC workflow first
@@ -155,7 +164,20 @@ calibrates how familiar the direction is to an experienced investor: popular
 projects are brief context/comparables, while recommendations emphasize
 substantive, less-discussed signals.
 
-`explore_platforms` runs up to five platform workers concurrently, one per
+Desktop deep research also includes public-web search by default. It uses
+DuckDuckGo's HTML results in a separate tab of the connected Chrome browser,
+then reads useful original pages. The first parallel research round includes
+this web branch alongside selected platforms, even for a single selected
+platform. It is implicit in deep mode and has no source-picker option; explicit
+user instructions excluding web research take precedence. Web findings retain
+source URLs and saved page text; search snippets remain labelled as leads.
+Access failures are reported without discarding other branches' findings.
+Deep mode needs Chrome even when only GitHub or podcasts are selected; light
+mode keeps their browser-free behavior. Temporary worker tabs close on completion
+or cancellation.
+
+`explore_platforms` runs up to five platform workers (plus the implicit web worker
+in desktop deep mode) concurrently, one per
 platform, using separate browser tabs where needed and sharing saved evidence
 and usage accounting. The parent synthesizes their findings and can delegate
 another focused round with new leads and gaps. Workers cannot recursively spawn

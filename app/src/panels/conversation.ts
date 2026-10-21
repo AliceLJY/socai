@@ -152,7 +152,7 @@ export function renderConversation(props: ConversationProps): string {
 // A centered hero + the same chat composer. When chrome isn't connected the
 // form is masked behind the connect overlay.
 export function renderComposePane(composer: ComposerProps): string {
-  const gated = sourcesNeedBrowser(composer.sites) && !composer.remoteProfile && !composer.managedProfile && composer.status.state !== "connected";
+  const gated = sourcesNeedBrowser(composer.sites, composer.researchMode) && !composer.remoteProfile && !composer.managedProfile && composer.status.state !== "connected";
   return `
     <div class="compose-pane">
       <div class="new-task-compose">
@@ -779,7 +779,7 @@ function renderComposer(c: ComposerProps, hideSources = false): string {
   const disabled = c.submitting || c.running;
   // A remote profile submits while disconnected: the run reconnects (minting
   // a fresh hosted session) on demand.
-  const needsConnection = sourcesNeedBrowser(c.sites) && !connected && !c.remoteProfile && !c.managedProfile;
+  const needsConnection = sourcesNeedBrowser(c.sites, c.researchMode) && !connected && !c.remoteProfile && !c.managedProfile;
   const sendDisabled = disabled
     || !c.value.trim()
     || needsConnection
@@ -829,7 +829,7 @@ function renderComposer(c: ComposerProps, hideSources = false): string {
     : c.voice.phase === "requesting" || c.voice.phase === "transcribing"
       ? `<span class="composer__send-dot" aria-hidden="true"></span>`
       : `<svg class="composer__voice-glyph" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5.5 10.5a6.5 6.5 0 0 0 13 0"></path><path d="M12 17v4"></path><path d="M9 21h6"></path></svg>`;
-  const connectHint = connected || !sourcesNeedBrowser(c.sites)
+  const connectHint = connected || !sourcesNeedBrowser(c.sites, c.researchMode)
     ? ""
     : c.remoteProfile
       ? `<p class="composer__hint">${esc(t("chrome.remoteAutoReconnect"))}</p>`
@@ -843,7 +843,7 @@ function renderComposer(c: ComposerProps, hideSources = false): string {
         </button>
       </p>`;
   const keyHint =
-    (connected || !sourcesNeedBrowser(c.sites)) && !c.modelReady ? `<p class="composer__hint">${esc(t("task.addKeyHint"))}</p>` : "";
+    (connected || !sourcesNeedBrowser(c.sites, c.researchMode)) && !c.modelReady ? `<p class="composer__hint">${esc(t("task.addKeyHint"))}</p>` : "";
   return `
     <div class="composer">
       <form id="composer-form" class="composer__form">

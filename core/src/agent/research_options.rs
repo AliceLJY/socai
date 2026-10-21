@@ -11,6 +11,8 @@ pub struct ResearchOptions {
     pub workflow: String,
     pub custom_instructions: String,
     pub automatic_sources: bool,
+    /// Desktop-only implicit web worker; not a source-picker selection.
+    pub web_search: bool,
 }
 impl ResearchOptions {
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -41,10 +43,13 @@ impl ResearchOptions {
         } else {
             "Research depth: quick. Produce a useful first pass within the smaller budget, preserving relevant uncertain leads. Do not turn this into exhaustive research or diligence. Loading a skill does not change this budget."
         };
+        let depth = if self.deep { format!("{depth}\n\n{COMMENT_FEEDBACK_GUIDANCE}") } else { depth.to_string() };
+        let depth = if self.deep && self.web_search { format!("{depth}\n\n{WEB_SEARCH_GUIDANCE}") } else { depth };
         format!("{}\n\n{}\n\n{}\n\n{}\n\n{}", depth, self.workflow_instructions(), WORKBENCH_GUIDANCE, super::research_board::RELATION_GUIDANCE,
-            if self.automatic_sources { "Choose one or more available platforms based on the user's question. For broad VC discovery default to xhs, x, weixin, podcast and github when available. Explain missing coverage or access failures." } else { "Only collect new evidence from selected platforms. Explain missing coverage or access failures; never bypass source selection." })
+            if self.automatic_sources { "Choose one or more available platforms based on the user's question. For broad VC discovery default to xhs, x, weixin, podcast and github when available. Explain missing coverage or access failures." } else { "Only collect new social-platform evidence from selected platforms. Use supplementary public-web research only when explicitly enabled by the deep-mode guidance above. Explain missing coverage or access failures; never bypass explicit user source restrictions." })
     }
-    pub fn tools(&self, backend: Arc<dyn Backend>, page: Option<Arc<PageSession>>, sites: Vec<String>, language: Option<String>, hosted_policy: String) -> Vec<Arc<dyn Tool>> {
+    pub fn tools(&self, backend: Arc<dyn Backend>, page: Option<Arc<PageSession>>, mut sites: Vec<String>, language: Option<String>, hosted_policy: String) -> Vec<Arc<dyn Tool>> {
+        if self.deep && self.web_search && !sites.iter().any(|site| site == "web") { sites.push("web".into()); }
         let board = Arc::new(super::research_board::ResearchBoardTool::default());
         vec![board.clone(), Arc::new(crate::sites::explore::ExplorePlatformsTool {
             backend, page, sites, language, workflow: self.workflow_instructions(), board, deep: self.deep, hosted_policy,
@@ -52,6 +57,10 @@ impl ResearchOptions {
     }
 }
 pub const WORKBENCH_GUIDANCE: &str = "Research workbench: use update_research_board early to state platform focus and a short plan; add useful leads incrementally as found, including incomplete signals, and update next_steps when direction changes. This surface shows concise findings and actions, never private reasoning. Update after each useful discovery batch, without waiting for final synthesis. Include every distinct useful team/product/direction as a node even when no relationship is known. After each platform round, reconcile duplicate entities across platforms and add concrete sourced founder, team, product, dependency or collaboration relations. Never invent an edge merely to fill the graph. Keep sourced relationships distinct from hypotheses. For deep research, also save and publish a CSV or XLSX findings table with names, platforms, signals, source URLs, uncertainties and next steps; produce it once at delivery, even if only a few useful leads are available. Never invent rows to fill it.";
+
+pub const COMMENT_FEEDBACK_GUIDANCE: &str = "Incidental comment feedback in deep research: when reading each post on a platform with comments or replies (such as XHS, X or Douyin), also skim the first few available comments, typically 3–5, using the platform's actual read tools. Reuse comments already returned or saved; if a separate read is needed, request only a small first batch. Do not routinely paginate, expand reply chains or launch separate sentiment searches. Respect explicit user limits and report unavailable comments without blocking the main research. Retain relevant praise, complaints, disagreements, unmet needs and repeated themes as supplementary evidence, clearly distinguishing commenter views from the post author's claims. Cite the original post and an observed comment/reply link when available. Treat this small, platform-ordered sample as anecdotal: do not infer population sentiment, percentages or a trend from one isolated opinion. Include useful feedback in the synthesis or a brief comment-feedback section when warranted, without forcing a section when no useful signal was found. Pass this lightweight sampling scope to delegated branches and retain their comment findings when synthesizing. If the user explicitly requests reputation, sentiment or comment analysis, follow their requested scope and depth instead of this incidental sampling default.";
+
+pub const WEB_SEARCH_GUIDANCE: &str = "Deep research includes supplementary public-web research by default, even when the source picker lists only social platforms or HTTP-only sources. Start explore_platforms early with a web branch alongside the useful selected-platform branches in the same call, including for single-platform research. The web worker owns a separate browser tab and uses DuckDuckGo, then reads useful original pages. Pass the user's full goal, explicit source restrictions and known context. This is an implicit deep-mode supplement, not an extra source-picker platform; selected-platform restrictions still apply to social platforms. Explicit user instructions excluding web or limiting research to particular sources override this default. Integrate source-linked web findings with platform evidence, label snippet-only leads, and disclose web access failures without blocking useful platform research. Follow up selectively instead of repeating web searches in every round.";
 
 use std::{path::Path, io::Write};
 use serde_json::{json, Value};

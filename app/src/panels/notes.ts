@@ -445,9 +445,9 @@ function coverInner(note: NoteData, idx: number): string {
 function renderCard(note: NoteData, density: "rich" | "compact" = "rich"): string {
   if (note.site === "x") return `<article class="x-feed-card" data-note-open="${esc(note.note_id)}" role="button" tabindex="0"><header class="x-post-author">${avatar(note, 'note-card__avatar')}<div><strong>${esc(note.author?.name || 'X')}</strong><span>${esc(note.author?.handle ? `@${note.author.handle.replace(/^@/, '')}` : '')}</span></div><span class="x-post-brand">𝕏</span></header><p class="x-feed-text">${esc(note.content || note.excerpt || note.title || '')}</p>${note.media?.length ? `<div class="x-feed-media">${mediaFrame(note, coverOf(note), "cover")}</div>` : ''}<div class="x-post-stats">${statsRow(note)}</div></article>`;
   if (note.site === "github") return githubCard(note);
-  if (note.site === "weixin" || note.site === "podcast") return `<div class="note-article-card${note.site === 'podcast' ? ' note-article-card--podcast' : ''}" data-note-open="${esc(note.note_id)}" role="button" tabindex="0">
+  if (note.site === "web" || note.site === "weixin" || note.site === "podcast") return `<div class="note-article-card${note.site === 'podcast' ? ' note-article-card--podcast' : ''}" data-note-open="${esc(note.note_id)}" role="button" tabindex="0">
     <div class="note-article-card__author">${avatar(note)}<span>${esc(note.author?.name || platformName(note))}</span></div>
-    <h3 class="t-body">${esc(note.title || '')}</h3>${note.site === 'podcast' ? '' : `<p class="t-small">${esc(note.excerpt || '')}</p>`}</div>`;
+    <h3 class="t-body">${esc(note.title || '')}</h3>${note.site === 'podcast' ? '' : `<p class="t-small">${esc(note.excerpt || (note.site === 'web' ? note.content?.slice(0, 280) : '') || '')}</p>`}</div>`;
   const title = esc(note.title || "");
   const name = esc((note.author && note.author.name) || "");
   const platform = platformName(note);
@@ -494,7 +494,7 @@ export function citationLabel(label: string): string {
 }
 function pillHTML(id: string, label: string, note: NoteData): string {
   const cover = coverOf(note);
-  const icon = note.site === "weixin" || note.site === "podcast" || note.site === "github" ? avatar(note, "note-cite__avatar") : mediaFrame(note, cover, "dot");
+  const icon = note.site === "web" || note.site === "weixin" || note.site === "podcast" || note.site === "github" ? avatar(note, "note-cite__avatar") : mediaFrame(note, cover, "dot");
   return (
     `<span class="note-cite-wrap" data-note-cite="${esc(id)}">` +
     `<span class="note-cite" data-note-open="${esc(id)}" role="button" tabindex="0">` +
@@ -819,7 +819,7 @@ function viewerHTML(note: NoteData): string {
       <article class="note-article-scroll"><h1 class="t-h2">${esc(note.title || 'GitHub')}</h1>
         <div class="note-article-content t-body" data-github-view="${esc(note.note_id)}">${githubBody(note)}</div>
       </article></div></div>`;
-  if (note.site === "weixin" || note.site === "podcast") return `<div class="note-viewer-backdrop" data-note-close>
+  if (note.site === "web" || note.site === "weixin" || note.site === "podcast") return `<div class="note-viewer-backdrop" data-note-close>
     <div class="note-viewer-panel note-viewer-panel--article" role="dialog" aria-label="${esc(note.title || 'article')}" data-note-stop data-note-article="${esc(note.note_id)}">
       ${corner}<div class="note-view__author">${avatar(note, 'note-view__avatar')}<span class="note-view__author-name">${esc(note.author?.name || '')}</span></div>
       <article class="note-article-scroll"><h1 class="t-h2">${esc(note.title || '')}</h1>

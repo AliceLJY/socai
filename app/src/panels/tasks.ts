@@ -1542,7 +1542,7 @@ export namespace agentPanel {
     const running = !!task && (task.status === "running" || task.status === "queued");
     // Remote profiles submit while disconnected; the run reconnects on demand.
     const needsConnection =
-      sourcesNeedBrowser(task ? taskSites(task.task_id) : draftSites) &&
+      sourcesNeedBrowser(task ? taskSites(task.task_id) : draftSites, task ? (replyResearchModes.get(task.task_id) ?? task.research_mode ?? false) : researchMode) &&
       shell.status.state !== "connected" && !settingsMenu.isRemoteProfile() && !settingsMenu.isManagedProfile();
     const selected = selectedModel();
     const modelReady = task ? true : !!selected && selected.has_key;

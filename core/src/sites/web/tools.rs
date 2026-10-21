@@ -180,6 +180,55 @@ pub fn web_tools(page: Arc<PageSession>) -> Vec<Arc<dyn Tool>> {
     ]
 }
 
+/// The implicit desktop worker gets only search, navigation and reading, never
+/// the generic click/type controls available to explicit browser tasks.
+pub fn research_tools(page: Arc<PageSession>) -> Vec<Arc<dyn Tool>> {
+    vec![
+        Arc::new(SearchTool { page: page.clone() }),
+        Arc::new(NavigateTool { page: page.clone() }),
+        Arc::new(ReadTool { page: page.clone() }),
+        Arc::new(CollectLinksTool { page }),
+    ]
+}
+
+struct SearchTool {
+    page: Arc<PageSession>,
+}
+
+#[async_trait]
+impl Tool for SearchTool {
+    fn name(&self) -> &str { "web_search" }
+    fn description(&self) -> &str {
+        "Search the public web with DuckDuckGo in this worker's own browser tab. Returns up to ten observed titles, URLs and snippets. Open useful returned URLs with web_navigate and web_read before treating snippets as article evidence. Report verification/access failures instead of claiming no results."
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":512}},"required":["query"]})
+    }
+    async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+        let query = required_text(&input, "query")?;
+        anyhow::ensure!(query.chars().count() <= 512 && !query.contains('\0'), "Search query must be at most 512 characters");
+        let mut url = reqwest::Url::parse("https://html.duckduckgo.com/html/")?;
+        url.query_pairs_mut().append_pair("q", query);
+        self.page.navigate_with_timeout(url.as_str(), 30.0).await?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let result = crate::sites::learning::run_site_browser_tool(
+                &self.page, "web", "searchResults", Some(&json!({"query":query})),
+            ).await?;
+            if let Some(reason) = result["reason"].as_str() {
+                if reason.contains("verification") || tokio::time::Instant::now() >= deadline {
+                    return Ok(ToolResult::failure(reason));
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+            anyhow::ensure!(result["results"].as_array().is_some_and(|r| !r.is_empty()), "Unexpected web search result");
+            ctx.write_json_artifact("web-search", &result, "artifacts", self.name(), "json", "DuckDuckGo search snippets (not full page reads)", input)?;
+            return Ok(json_text(&result));
+        }
+    }
+}
+
 pub async fn web_agent_tools(
     page: Arc<PageSession>,
     _llm_provider: Arc<dyn LlmProvider>,
@@ -417,7 +466,7 @@ impl Tool for ReadTool {
         })
     }
 
-    async fn call(&self, input: Value, _ctx: &ToolContext) -> anyhow::Result<ToolResult> {
+    async fn call(&self, input: Value, ctx: &ToolContext) -> anyhow::Result<ToolResult> {
         let page_info = self.page.page_info().await?;
         let current_url = page_info.get("url").and_then(Value::as_str).unwrap_or("");
         if reqwest::Url::parse(current_url).is_ok_and(|url| {
@@ -452,7 +501,16 @@ impl Tool for ReadTool {
         let script = READ_SCRIPT
             .replace("__MAX_CHARS__", &max_chars.to_string())
             .replace("__MAX_LINKS__", &max_links.to_string());
-        Ok(json_text(&self.page.evaluate_json(&script).await?))
+        let result = self.page.evaluate_json(&script).await?;
+        let url = result["url"].as_str().unwrap_or_default();
+        validate_public_url(url).await?;
+        anyhow::ensure!(result["text"].as_str().is_some_and(|text| !text.trim().is_empty()), "No readable web page text; preserve this coverage gap");
+        let id = format!("web:{url}");
+        ctx.record_note(&id, json!({
+            "note_id":id,"site":"web","url":url,"title":result["title"],
+            "content":result["text"],"media":[],"comments":[],"level":"deep"
+        }));
+        Ok(json_text(&result))
     }
 }
 

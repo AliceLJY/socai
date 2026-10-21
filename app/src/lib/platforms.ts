@@ -17,6 +17,9 @@ const icons: Record<string, string> = {
 };
 
 export function platformIcon(site: string): string {
+  if (site === "web") {
+    return `<span class="platform-icon" aria-hidden="true"><svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="8"/><ellipse cx="10" cy="10" rx="3.5" ry="8"/><path d="M2 10h16"/></svg></span>`;
+  }
   if (site === "auto") {
     return `<span class="platform-icon" aria-hidden="true"><svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m10 1.5 2.1 6.4L18.5 10l-6.4 2.1L10 18.5l-2.1-6.4L1.5 10l6.4-2.1L10 1.5Z"/></svg></span>`;
   }
@@ -53,11 +56,12 @@ export function platformLabel(site: string): string {
     case "github": return "GitHub";
     case "podcast": return t("platform.podcast");
     case "weixin": return t("platform.weixin");
+    case "web": return t("platform.web");
     default: return site;
   }
 }
 
-/** GitHub and podcast HTTP tools do not require a Chrome session. */
-export function sourcesNeedBrowser(sites: readonly string[]): boolean {
-  return sites.length === 0 || sites.some((site) => site !== "podcast" && site !== "github");
+/** Deep mode's implicit web worker needs Chrome even for HTTP-only sources. */
+export function sourcesNeedBrowser(sites: readonly string[], deep = false): boolean {
+  return deep || sites.length === 0 || sites.some((site) => site !== "podcast" && site !== "github");
 }

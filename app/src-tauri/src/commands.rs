@@ -61,7 +61,7 @@ const TAURI_CITATION_RULES: &str = "\n\n## Citing sources in the final answer (r
     - If only a search snippet was available, say so; do not present it as a full article read.";
 
 const TAURI_SITE_ROUTING_RULES: &str = "\n\n## Browser routing\n\
-    Browser-enabled conversations start on a blank tab; GitHub/podcast-only tasks have no browser. Do not navigate to Xiaohongshu or \
+    Browser-enabled conversations start on a blank tab; light GitHub/podcast-only tasks have no browser. Deep research uses a separate web worker tab for supplementary public-web search. Do not navigate to Xiaohongshu or \
     any other site until the user's request requires that platform. For LinkedIn, \
     Instagram, Douyin, or TikTok, use navigate_site, read the returned site skill, \
     and follow that platform's tools and workflow. The Xiaohongshu playbook applies \
@@ -2859,7 +2859,7 @@ async fn run_agent_task_background(
     let http_only = registry
         .get(&task_id)
         .await
-        .is_some_and(|snapshot| !socai_core::sites::registry::sites_need_browser(&snapshot.sites));
+        .is_some_and(|snapshot| !snapshot.research_mode && !socai_core::sites::registry::sites_need_browser(&snapshot.sites));
     let mut connect_attempts = 0u32;
     let (_permit, browser, _activity) = loop {
         let Some(permit) = registry.acquire_run_permit().await else {
@@ -3310,6 +3310,7 @@ async fn run_agent_task_on_session_page(
     let available_sites = if auto_sources {
         socai_core::sites::all_native_site_adapters()
             .iter()
+            .filter(|site| site.id != "web")
             .map(|site| site.id.to_string())
             .collect::<Vec<_>>()
     } else {
@@ -3421,6 +3422,7 @@ async fn run_agent_task_on_session_page(
             workflow: match workflow { TaskWorkflow::Vc => "vc", TaskWorkflow::Custom => "custom", _ => "general" }.into(),
             custom_instructions: selection.as_ref().and_then(|s| s.custom_workflow.as_ref()).map(|s| s.instructions.clone()).unwrap_or_default(),
             automatic_sources: auto_sources,
+            web_search: research_mode,
         };
         research.validate()?;
         tools.extend(research.tools(llm_provider.clone(), browser.as_ref().map(|(_, _, p)| p.clone()), available_sites.clone(), language.map(str::to_string), String::new()));
@@ -3458,7 +3460,7 @@ async fn run_agent_task_on_session_page(
             )
         } else {
             format!(
-            "\n\n## Selected sources\nThe user selected these platforms: {}. Only collect new evidence from these platforms. \
+            "\n\n## Selected sources\nThe user selected these platforms: {}. Only collect new social-platform evidence from these platforms. Deep research additionally includes the implicit public-web worker, unless the user explicitly excludes it. \
              For GitHub use github_request directly without browser navigation. For podcasts use the podcast HTTP tools directly, without navigation or login. For WeChat use search_weixin_articles (HTTP) and read_weixin_article (Chrome). Use navigate_site and its returned skill for other browser-based non-Xiaohongshu platforms, including X. \
              Do not use shell or other tools to bypass this selection. If the request needs an unselected \
              platform, explain that the user can change the source selection. Existing conversation evidence \

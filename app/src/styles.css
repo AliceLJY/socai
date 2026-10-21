@@ -118,7 +118,9 @@ body.has-paper::before {
   opacity: 1;
   z-index: 0;
 }
-body.has-paper > * { position: relative; z-index: 1; }
+/* Lift the app above the paper without overriding body-mounted popovers'
+   fixed positioning and stacking order. */
+body.has-paper > #app { position: relative; z-index: 1; }
 
 #app { height: 100vh; display: flex; }
 

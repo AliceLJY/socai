@@ -901,6 +901,7 @@ const messages = {
   "note.listenOriginal": { en: "Listen to original", zh: "收听原播客" },
   "platform.podcast": { en: "Podcasts", zh: "播客" },
   "platform.weixin": { en: "WeChat Articles", zh: "微信公众号" },
+  "platform.web": { en: "Web search", zh: "网页搜索" },
   "platform.dy": { en: "Douyin", zh: "抖音" },
   "task.hero": {
     en: "what should socai research?",

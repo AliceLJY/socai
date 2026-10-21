@@ -47,6 +47,13 @@ clue. An unknown fact is not automatically unfinished discovery.
   every worker to repeat broad searches. Workflow defaults guide automatic
   sources; explicit selections take precedence. Keep partial findings and
   distinguish unavailable platforms from searched platforms with no useful leads.
+- When deep-mode instructions enable the implicit public-web worker, include a
+  `web` branch in the first explore_platforms call alongside selected platforms,
+  even for single-platform research. Give it complementary questions and explicit
+  user source restrictions. It searches DuckDuckGo in its own temporary tab and
+  reads useful original pages; merge its sourced findings with platform evidence.
+  Do not treat search snippets as full-page reads. Explicit user exclusions take
+  precedence, and web access failures should not block useful platform findings.
 - On XHS, use explore(branches=[{question: "..."}, ...]) for autonomous investigation of
   concepts, people, profiles or posts. Up to three independent branches use
   separate tabs. Supply the goal, known context, observed IDs and tried queries;
@@ -65,6 +72,26 @@ clue. An unknown fact is not automatically unfinished discovery.
   leads with brief labels. A curator is distinct from a company they mention;
   several posts about one company are not several deals. Exclude irrelevance
   and duplicates, not useful unnamed builders. Do not invent visits or facts.
+
+## Incidental comment feedback in deep mode
+
+While reading each post on platforms with comment sections (including XHS, X
+and Douyin), skim the first few available comments or replies, typically 3–5.
+Reuse returned/saved comments; otherwise read a small first batch with the
+platform's actual tools. Respect explicit user limits. Do not routinely paginate,
+expand reply chains or launch separate sentiment searches. If comments are
+unavailable, note the coverage limit and continue the main research.
+
+Keep relevant praise, complaints, disagreements, unmet needs and repeated themes
+as supplementary evidence. Distinguish commenter views from author claims and
+link the original post plus an observed comment/reply URL when available. These
+small, platform-ordered samples are anecdotal, not representative sentiment;
+do not infer percentages or trends from isolated opinions. Fold useful signals
+into the synthesis, optionally in a brief comment-feedback section. Do not force
+a section without useful evidence. Pass this scope explicitly in XHS explore
+branch questions and retain comment findings from all workers when synthesizing.
+If the user explicitly requests reputation, sentiment or comment analysis, follow
+their requested scope and depth instead of this incidental sampling default.
 
 ## Search filters on XHS
 
