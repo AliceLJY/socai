@@ -212,6 +212,61 @@ struct CompletedParallelToolCall {
     duration_ms: u64,
 }
 
+const STRUCTURED_FAILURE_LIMIT: u32 = 3;
+
+#[derive(Default)]
+struct ToolFailureCircuit {
+    counts: BTreeMap<(String, String), u32>,
+}
+
+impl ToolFailureCircuit {
+    fn record(&mut self, name: &str, result: &ToolResult) -> Option<String> {
+        if !result.failed() {
+            self.counts.retain(|(tool, _), _| tool != name);
+            return None;
+        }
+        let reason = structured_dependency_failure_reason(result)?;
+        let count = self
+            .counts
+            .entry((name.to_string(), reason.clone()))
+            .or_default();
+        *count += 1;
+        (*count >= STRUCTURED_FAILURE_LIMIT).then(|| {
+            format!(
+                "{name} repeatedly returned dependency failure {reason} ({count} times); acquisition stopped to avoid an unbounded retry loop"
+            )
+        })
+    }
+}
+
+fn structured_dependency_failure_reason(result: &ToolResult) -> Option<String> {
+    let value: Value = serde_json::from_str(&result.flat_text()).ok()?;
+    let reason = value
+        .get("reason")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("failure")
+                .and_then(Value::as_object)
+                .and_then(|failure| failure.get("reason"))
+                .and_then(Value::as_str)
+        })?
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        reason.as_str(),
+        "unexpected_search_redirect"
+            | "search_http_error"
+            | "search_request_failed"
+            | "challenge_required"
+            | "rate_limited"
+            | "retry_after"
+            | "service_unavailable"
+            | "upstream_unavailable"
+    )
+    .then_some(reason)
+}
+
 async fn execute_parallel_tool_call(
     tools: &[SharedTool],
     events: &broadcast::Sender<AgentEvent>,
@@ -378,6 +433,7 @@ pub async fn run_agent_with_events(
     let mut final_text = String::new();
     let mut usage = TokenUsage::default();
     let mut tool_call_history: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    let mut tool_failure_circuit = ToolFailureCircuit::default();
     let mut completed = false;
     let mut terminal_error: Option<String> = None;
     let mut degraded_reason: Option<String> = None;
@@ -736,6 +792,12 @@ pub async fn run_agent_with_events(
                 );
                 let flat = result.flat_text();
                 let summary = truncate_summary(&flat, 240);
+                let failure_circuit_reason = (!local_delivery)
+                    .then(|| tool_failure_circuit.record(&name, &result))
+                    .flatten();
+                if let Some(reason) = &failure_circuit_reason {
+                    degraded_reason.get_or_insert_with(|| reason.clone());
+                }
                 emit(
                     &events,
                     AgentEvent::ToolResult {
@@ -759,6 +821,16 @@ pub async fn run_agent_with_events(
                 };
                 for text in feedback.notes.into_iter().rev() {
                     history_content.insert(0, ToolResultContent::Text { text });
+                }
+                if let Some(reason) = failure_circuit_reason {
+                    history_content.insert(
+                        0,
+                        ToolResultContent::Text {
+                            text: format!(
+                                "[Tool circuit opened: {reason}. Do not call this tool again.]"
+                            ),
+                        },
+                    );
                 }
                 extension_stop_reason = extension_stop_reason.or(feedback.stop_reason);
                 if repeat_count >= 3 {
@@ -946,6 +1018,12 @@ pub async fn run_agent_with_events(
                 );
                 let flat = result.flat_text();
                 let summary = truncate_summary(&flat, 240);
+                let failure_circuit_reason = (!local_delivery)
+                    .then(|| tool_failure_circuit.record(name, &result))
+                    .flatten();
+                if let Some(reason) = &failure_circuit_reason {
+                    degraded_reason.get_or_insert_with(|| reason.clone());
+                }
                 emit(
                     &events,
                     AgentEvent::ToolResult {
@@ -969,6 +1047,16 @@ pub async fn run_agent_with_events(
                 };
                 for text in feedback.notes.into_iter().rev() {
                     history_content.insert(0, ToolResultContent::Text { text });
+                }
+                if let Some(reason) = failure_circuit_reason {
+                    history_content.insert(
+                        0,
+                        ToolResultContent::Text {
+                            text: format!(
+                                "[Tool circuit opened: {reason}. Do not call this tool again.]"
+                            ),
+                        },
+                    );
                 }
                 extension_stop_reason = extension_stop_reason.or(feedback.stop_reason);
                 // Break tight loops: when the model fires the *same* call with the
@@ -2390,6 +2478,40 @@ mod tests {
         assert!(contains_pseudo_tool_call(
             "<function_calls><invoke name=\"publish_artifact\">"
         ));
+    }
+
+    #[test]
+    fn repeated_structured_dependency_failures_trip_across_changed_arguments() {
+        let mut circuit = ToolFailureCircuit::default();
+        let failed = ToolResult::failure(
+            json!({"ok": false, "reason": "unexpected_search_redirect"}).to_string(),
+        );
+
+        assert!(circuit.record("weixin_search", &failed).is_none());
+        assert!(circuit.record("weixin_search", &failed).is_none());
+        let reason = circuit.record("weixin_search", &failed).unwrap();
+
+        assert!(reason.contains("weixin_search"));
+        assert!(reason.contains("unexpected_search_redirect"));
+    }
+
+    #[test]
+    fn structured_failure_circuit_resets_after_success_and_ignores_user_action() {
+        let mut circuit = ToolFailureCircuit::default();
+        let blocked =
+            ToolResult::failure(json!({"ok": false, "reason": "search_http_error"}).to_string());
+        let login =
+            ToolResult::failure(json!({"ok": false, "reason": "login_required"}).to_string());
+
+        assert!(circuit.record("weixin_search", &blocked).is_none());
+        assert!(circuit.record("weixin_search", &blocked).is_none());
+        assert!(circuit
+            .record("weixin_search", &ToolResult::text(r#"{"ok":true}"#))
+            .is_none());
+        assert!(circuit.record("weixin_search", &blocked).is_none());
+        for _ in 0..4 {
+            assert!(circuit.record("wait_for_login", &login).is_none());
+        }
     }
 
     #[tokio::test]
