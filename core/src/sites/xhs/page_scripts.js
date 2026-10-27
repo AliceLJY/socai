@@ -310,11 +310,11 @@ const SocaiXhsPageScripts = (() => {
     const url = location.href;
     const path = location.pathname.replace(/\/+$/, '');
     let state = 'unknown';
-    if (/xiaohongshu\.com\/user\/profile\//.test(url)) state = 'profile_page';
+    if (/(?:xiaohongshu|rednote)\.com\/user\/profile\//.test(url)) state = 'profile_page';
     else if (/^\/board\/[^/]+$/.test(path)) state = 'board_page';
     else if (/^\/board\/[^/]+\/[^/]+/.test(path) || /\/(?:explore|discovery|search_result)\/[^/?#]+/.test(url) || getNoteOverlay()) state = 'note_detail';
     else if (url.includes('/search_result')) state = 'search_results';
-    else if (/xiaohongshu\.com/.test(url)) state = 'homepage';
+    else if (/(?:xiaohongshu|rednote)\.com/.test(url)) state = 'homepage';
     return {
       ok: true,
       state,
@@ -359,9 +359,12 @@ const SocaiXhsPageScripts = (() => {
 
     const cards = $$('section.note-item, [data-note-id], .feeds-page .note-item');
     return cards.map((card, i) => {
-      const linkEl = card.querySelector('a[href*="/explore/"], a[href*="/search_result/"]') || card.closest('a') || card.querySelector('a');
+      const linkEl = card.querySelector('a[href*="/explore/"], a[href*="/search_result/"], a[href*="/discovery/"]') || card.closest('a') || card.querySelector('a');
       const bareLink = linkEl ? linkEl.href : '';
-      const idMatch = bareLink.match(/\/(?:explore|search_result|discovery)\/([^/?#]+)/);
+      // rednote.com profile cards link only as /user/profile/<author>/<note>
+      // (no bare /explore link), so take the note id from that route too.
+      const idMatch = bareLink.match(/\/(?:explore|search_result|discovery(?:\/item)?)\/([^/?#]+)/)
+        || bareLink.match(/\/user\/profile\/[^/?#]+\/([0-9a-f]{24})(?:[/?#]|$)/);
       const noteId = card.dataset?.noteId || (idMatch ? idMatch[1] : '');
       // Profile cards render a hidden bare /explore/<id> link plus visible
       // cover/title links shaped /user/profile/<author>/<note>?xsec_token=… .
@@ -498,8 +501,9 @@ const SocaiXhsPageScripts = (() => {
     if (noteId) {
       for (const card of cards) {
         if (card.dataset?.noteId === noteId) return card;
-        const link = card.querySelector('a[href*="/explore/"], a[href*="/search_result/"], a[href*="/discovery/"]');
-        if (link?.href?.includes(noteId)) return card;
+        // rednote.com profile cards link only as /user/profile/<author>/<note>.
+        const links = $$('a[href*="/explore/"], a[href*="/search_result/"], a[href*="/discovery/"], a[href*="/user/profile/"]', card);
+        if (links.some((link) => String(link.href || '').includes(noteId))) return card;
       }
     }
     const index = arg && Number.isInteger(arg.index) ? arg.index : -1;
@@ -576,7 +580,7 @@ const SocaiXhsPageScripts = (() => {
   }
 
   function extractNoteIdFromUrl() {
-    const m = location.href.match(/\/(?:explore|discovery|search_result)\/([^/?#]+)/);
+    const m = location.href.match(/\/(?:explore|discovery(?:\/item)?|search_result)\/([^/?#]+)/);
     return m ? m[1] : '';
   }
 
@@ -1328,14 +1332,30 @@ const SocaiXhsPageScripts = (() => {
   }
 
   function profileInfo() {
-    const displayName = firstVisibleText(
-      ['.user-name', '.profile-name', '.nickname', '.name', 'h1'],
-      document,
-    );
+    // Read the name from the hydrated `.user-info` header first: the
+    // document-wide fallbacks (`.name`) also match note-card authors, which
+    // render before the header on rednote.com and would make an empty header
+    // look ready. `header_ready` reports that header read for the caller's wait.
+    const nameSelectors = ['.user-name', '.profile-name', '.nickname', '.name', 'h1'];
+    const header = $$('.user-info').find(isVisible) || null;
+    const headerName = header ? firstVisibleText(nameSelectors, header) : '';
+    const displayName = headerName || firstVisibleText(nameSelectors, document);
     const bio = firstVisibleText(['.user-desc', '.profile-desc', '.desc', '.bio'], document);
     const body = norm(text(document.body));
-    const xhsId = (body.match(/小红书号[:：]?\s*([A-Za-z0-9_.-]+)/) || [])[1] || profileIdFromUrl();
-    const ipLocation = (body.match(/IP属地[:：]?\s*([^\s,，。]+)/i) || [])[1] || '';
+    // Labels are Chinese on xiaohongshu.com and English on rednote.com
+    // ("rednote ID: …", "IP location: …", "592 Follow", "6.2K Followers",
+    // "69.2K Likes and saves"); both verified against profile snapshots.
+    // Prefer the labeled header element so a multi-word value ("IP location:
+    // United States") survives; the body regex is the fallback.
+    const labeledValue = (selector, labelRe) => {
+      const el = $$(selector, header || document).find(isVisible);
+      return el ? norm(text(el)).replace(labelRe, '').replace(/^[:：]\s*/, '').trim() : '';
+    };
+    const xhsId = (labeledValue('.user-redId', /^(?:小红书号|rednote ID)/i).match(/^[A-Za-z0-9_.-]+/) || [])[0]
+      || (body.match(/(?:小红书号|rednote ID)[:：]?\s*([A-Za-z0-9_.-]+)/) || [])[1]
+      || profileIdFromUrl();
+    const ipLocation = labeledValue('.user-IP', /^(?:IP属地|IP location)/i)
+      || (body.match(/(?:IP属地|IP location)[:：]?\s*([^\s,，。]+)/i) || [])[1] || '';
     const statText = (label) => {
       const re = new RegExp(`([0-9.,万wWkK+]+)\\s*(?:${label})`);
       return (body.match(re) || [])[1] || '';
@@ -1343,6 +1363,7 @@ const SocaiXhsPageScripts = (() => {
     const verification = profileVerification();
     return {
       ok: true,
+      header_ready: !!headerName,
       display_name: displayName,
       xhs_id: xhsId,
       profile_url: location.href,
@@ -1352,9 +1373,9 @@ const SocaiXhsPageScripts = (() => {
       gender: profileGender(),
       verified: verification.verified,
       verification: verification.verification,
-      followers: statText('粉丝'),
-      following: statText('关注'),
-      likes_and_collections: statText('获赞与收藏|获赞|赞与收藏'),
+      followers: statText('粉丝|Followers'),
+      following: statText('关注|Follow(?!ers)'),
+      likes_and_collections: statText('获赞与收藏|获赞|赞与收藏|Likes and saves'),
     };
   }
 
@@ -1388,7 +1409,8 @@ const SocaiXhsPageScripts = (() => {
 
   function sidebarMe() {
     const links = $$('.user.side-bar-component a, li.user.side-bar-component a')
-      .filter((el) => isVisible(el) && norm(text(el)) === '我');
+      // rednote.com renders the same sidebar entry with an English label.
+      .filter((el) => isVisible(el) && /^(?:我|me)$/i.test(norm(text(el))));
     const el = links.find(inViewport) || links[0];
     if (!el) return { ok: false, error: 'me_not_found' };
     const href = absUrl(el.getAttribute('href') || el.href);
@@ -1401,10 +1423,13 @@ const SocaiXhsPageScripts = (() => {
   function profileTab(arg) {
     const label = norm(arg && arg.label).replace(/\s+/g, '');
     if (!label) return { ok: false, error: 'tab_label_required' };
+    // `label` may list alternatives separated by `|` (xiaohongshu.com and
+    // rednote.com render the same tabs with Chinese / English labels).
+    const labels = label.split('|').filter(Boolean);
     const matches = $$('.reds-tab-item').filter((el) => {
       if (!isVisible(el)) return false;
       const value = norm(text(el)).replace(/\s+/g, '');
-      return value === label || value.startsWith(`${label}・`) || value.startsWith(`${label}·`);
+      return labels.some((item) => value === item || value.startsWith(`${item}・`) || value.startsWith(`${item}·`));
     });
     const visible = matches.filter(centerInView);
     if (!visible.length) {
