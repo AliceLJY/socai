@@ -108,48 +108,14 @@ impl MediaProcessor {
         title: &str,
         referer: &str,
     ) -> Value {
-        let mut result = self
+        let result = self
             .download_video_poster(video, note_id, title, referer)
             .await;
-        let label = if !note_id.trim().is_empty() {
-            note_id
-        } else if !title.trim().is_empty() {
-            title
-        } else {
-            "video"
-        };
-
-        let source = downloadable_video_url(&result);
-        if source.is_empty() {
-            insert_string(
-                &mut result,
-                "download_error",
-                "downloadable video URL not found (blob: URLs cannot be downloaded)",
-            );
-            return result;
-        }
-
-        let t_file = Instant::now();
-        match self
-            .download_file_with_timeout(
-                &source,
-                referer,
-                label,
-                &url_suffix(&source, ".mp4"),
-                Duration::from_secs(VIDEO_DOWNLOAD_TIMEOUT_S.max(self.config.request_timeout_s)),
-            )
+        // Video files can be hundreds of MiB. Reuse the streaming path so a
+        // response Content-Length never becomes one process-sized allocation.
+        // The poster remains available even when the playable file fails.
+        self.download_video_file(&result, note_id, title, referer)
             .await
-        {
-            Ok(path) => insert_string(&mut result, "local_path", path.to_string_lossy()),
-            Err(err) => insert_string(&mut result, "download_error", format!("{err:#}")),
-        }
-        if let Some(map) = result.as_object_mut() {
-            map.insert(
-                "download_ms".into(),
-                serde_json::json!(t_file.elapsed().as_millis() as u64),
-            );
-        }
-        result
     }
 
     /// Download only the playable file for a video whose poster has already
@@ -392,4 +358,106 @@ fn downloadable_video_url(video: &Value) -> String {
     }
 
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use serde_json::json;
+    use tempfile::tempdir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+
+    use super::MediaProcessor;
+
+    #[tokio::test]
+    async fn video_download_writes_part_file_before_response_finishes() {
+        let first = vec![b'a'; 128 * 1024];
+        let second = vec![b'b'; 128 * 1024];
+        let expected = [first.clone(), second.clone()].concat();
+        let (first_sent_tx, first_sent_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert_ne!(read, 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        first.len() + second.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            stream.write_all(&first).await.unwrap();
+            stream.flush().await.unwrap();
+            first_sent_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            stream.write_all(&second).await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+
+        let directory = tempdir().unwrap();
+        let processor = MediaProcessor::for_run_dir(directory.path(), None).unwrap();
+        let download = tokio::spawn({
+            let processor = processor.clone();
+            async move {
+                processor
+                    .download_video(
+                        &json!({"url": format!("http://{address}/clip.mp4")}),
+                        "note-1",
+                        "video",
+                        "",
+                    )
+                    .await
+            }
+        });
+
+        first_sent_rx.await.unwrap();
+        let media_dir = directory.path().join("site_media/note-1");
+        let part = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(entries) = std::fs::read_dir(&media_dir) {
+                    if let Some(path) = entries
+                        .filter_map(Result::ok)
+                        .map(|entry| entry.path())
+                        .find(|path| {
+                            path.extension().and_then(|value| value.to_str()) == Some("part")
+                        })
+                    {
+                        if std::fs::metadata(&path).unwrap().len() == 128 * 1024 {
+                            break path;
+                        }
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("streaming download should expose a growing partial file");
+        assert!(!media_dir.join("video.mp4").exists());
+        assert_eq!(std::fs::metadata(&part).unwrap().len(), 128 * 1024);
+
+        release_tx.send(()).unwrap();
+        let result = download.await.unwrap();
+        server.await.unwrap();
+        let local_path = result["local_path"].as_str().unwrap();
+        assert_eq!(std::fs::read(local_path).unwrap(), expected);
+        assert_eq!(
+            std::path::Path::new(local_path).file_name().unwrap(),
+            "video.mp4"
+        );
+        assert!(!part.exists());
+    }
 }
