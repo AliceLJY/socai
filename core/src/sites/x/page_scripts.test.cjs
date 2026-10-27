@@ -52,6 +52,7 @@ function tweetFixture(id, {
   reply = false,
   replyTo = 'openai',
   replyLabel = 'Replying to',
+  replyCount = 12,
 } = {}) {
   const status = new FakeNode({ href: `https://x.com/${username}/status/${id}` });
   const time = new FakeNode({ datetime: '2026-09-23T02:00:00.000Z' });
@@ -66,7 +67,7 @@ function tweetFixture(id, {
   const body = new FakeNode({ text });
   const image = new FakeNode({ src: 'https://pbs.twimg.com/media/fixture.jpg', attributes: { alt: 'Fixture image' } });
   const photo = new FakeNode({ selectors: { 'img[src]': [image] } });
-  const replyButton = new FakeNode({ attributes: { 'aria-label': '12 Replies' } });
+  const replyButton = new FakeNode({ attributes: { 'aria-label': `${replyCount} Replies` } });
   const repostButton = new FakeNode({ attributes: { 'aria-label': '34 reposts' } });
   const likeButton = new FakeNode({ attributes: { 'aria-label': '56 Likes' } });
   const article = new FakeNode({
@@ -246,7 +247,7 @@ test('comments exclude the root post and retain reply posts', () => {
   assert.equal(comments[0].text, 'A visible reply');
 });
 
-test('comments fail closed on an unlabeled post inside the conversation region', () => {
+test('comments retain unlabeled direct replies within the root reply budget', () => {
   const root = tweetFixture('100');
   const directReply = tweetFixture('101', {
     username: 'reply_user',
@@ -262,11 +263,14 @@ test('comments fail closed on an unlabeled post inside the conversation region',
 
   const comments = scripts.comments({ limit: 10 });
 
-  assert.deepEqual(Array.from(comments, (comment) => comment.id), []);
+  assert.deepEqual(Array.from(comments, (comment) => comment.id), ['101']);
+  assert.equal(comments[0].is_reply, true);
+  assert.deepEqual(Array.from(comments[0].replying_to), ['openai']);
+  assert.equal(comments[0].relationship_evidence, 'conversation_region_with_root_reply_budget');
 });
 
 test('comments ignore reply-like text inside the post body', () => {
-  const root = tweetFixture('100');
+  const root = tweetFixture('100', { replyCount: 0 });
   const unrelated = tweetFixture('101', {
     username: 'other_user',
     text: 'This article literally says Replying to @openai but is not a reply',
@@ -280,6 +284,65 @@ test('comments ignore reply-like text inside the post body', () => {
   });
 
   assert.deepEqual(Array.from(scripts.comments({ limit: 10 }), (comment) => comment.id), []);
+});
+
+test('comments cap unlabeled conversation rows at the rendered root reply count', () => {
+  const root = tweetFixture('100', { replyCount: 1 });
+  const directReply = tweetFixture('101', {
+    username: 'reply_user',
+    text: 'The one rendered direct reply',
+  });
+  const extraRow = tweetFixture('102', {
+    username: 'suggested_user',
+    text: 'An unlabeled row beyond the root reply budget',
+  });
+  conversationFixture([root, directReply, extraRow]);
+  const scripts = loadScripts({
+    href: 'https://x.com/openai/status/100',
+    pathname: '/openai/status/100',
+    articles: [root, directReply, extraRow],
+  });
+
+  assert.deepEqual(Array.from(scripts.comments({ limit: 10 }), (comment) => comment.id), ['101']);
+});
+
+test('comments reject an older unlabeled row even when the root has reply budget', () => {
+  const root = tweetFixture('100', { replyCount: 1 });
+  const olderSuggestion = tweetFixture('99', {
+    username: 'suggested_user',
+    text: 'An older suggested post rendered after the root',
+  });
+  const directReply = tweetFixture('101', {
+    username: 'reply_user',
+    text: 'A chronologically valid direct reply',
+  });
+  conversationFixture([root, olderSuggestion, directReply]);
+  const scripts = loadScripts({
+    href: 'https://x.com/openai/status/100',
+    pathname: '/openai/status/100',
+    articles: [root, olderSuggestion, directReply],
+  });
+
+  assert.deepEqual(Array.from(scripts.comments({ limit: 10 }), (comment) => comment.id), ['101']);
+});
+
+test('comments retain explicit root relationships when the reply metric is zero', () => {
+  const root = tweetFixture('100', { replyCount: 0 });
+  const explicitReply = tweetFixture('101', {
+    username: 'reply_user',
+    text: 'An explicitly related reply',
+    reply: true,
+  });
+  conversationFixture([root, explicitReply]);
+  const scripts = loadScripts({
+    href: 'https://x.com/openai/status/100',
+    pathname: '/openai/status/100',
+    articles: [root, explicitReply],
+  });
+
+  const comments = scripts.comments({ limit: 10 });
+  assert.deepEqual(Array.from(comments, (comment) => comment.id), ['101']);
+  assert.equal(comments[0].relationship_evidence, 'explicit_reply_target');
 });
 
 test('comments reject unrelated recommendations and conversation ancestors', () => {

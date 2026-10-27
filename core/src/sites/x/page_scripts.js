@@ -149,6 +149,13 @@
     }
   }
 
+  function laterSnowflake(candidate, parent) {
+    const child = String(candidate || '');
+    const root = String(parent || '');
+    if (!/^\d+$/.test(child) || !/^\d+$/.test(root) || child === root) return false;
+    return child.length !== root.length ? child.length > root.length : child > root;
+  }
+
   const PROFILE_TABS = {
     with_replies: 'replies',
     replies: 'replies',
@@ -910,15 +917,32 @@
     const root = parseTweet(articles[rootIndex], 1);
     const rootHandle = root && root.author && root.author.username;
     if (!rootHandle) return [];
+    const visibleReplyCount = root && root.metrics && root.metrics.replies;
+    const inferredReplyBudget = Number.isFinite(visibleReplyCount)
+      ? Math.max(0, Number(visibleReplyCount))
+      : 0;
     const output = [];
     for (const article of articles.slice(rootIndex + 1)) {
       const replying = replyTargets(article);
-      // Generic reads fail closed when X omits the relationship label. The
-      // broad conversation region can also contain recommendations, so list
-      // position alone is not enough authority to classify a direct reply.
-      if (!replying.includes(rootHandle)) continue;
+      const explicitlyTargetsRoot = replying.includes(rootHandle);
+      if (replying.length > 0 && !explicitlyTargetsRoot) continue;
+      // Current X omits "Replying to" for direct root replies, including
+      // same-author thread continuations. Retain those only while the root's
+      // rendered reply metric proves that replies exist and bounds how many
+      // unlabeled conversation rows may be classified. Explicit relationships
+      // remain authoritative even when the metric is absent or stale.
+      if (!explicitlyTargetsRoot && output.length >= inferredReplyBudget) continue;
       const item = parseTweet(article, output.length + 1);
-      if (!item || item.id === active.id || output.some((entry) => entry.id === item.id)) continue;
+      // Promoted rows do not expose a canonical timestamp/status link, so they
+      // cannot satisfy this evidence contract even when interleaved between
+      // the root and its replies.
+      if (!item || !item.published_at || !laterSnowflake(item.id, active.id) ||
+        output.some((entry) => entry.id === item.id)) continue;
+      item.is_reply = true;
+      item.replying_to = explicitlyTargetsRoot ? replying : [rootHandle];
+      item.relationship_evidence = explicitlyTargetsRoot
+        ? 'explicit_reply_target'
+        : 'conversation_region_with_root_reply_budget';
       output.push(item);
       if (output.length >= limit) break;
     }
